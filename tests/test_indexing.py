@@ -10,6 +10,7 @@ from degoogle_photos.indexing import (
     find_all_sidecar_files,
     find_sidecar_for_media,
     resolve_sidecars,
+    find_orphan_sidecars,
     looks_like_google_photos_takeout,
     resolve_source_root,
     validate_source_root,
@@ -203,6 +204,21 @@ def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
 
     assert resolved[dupe] == sidecar
     assert resolved[keeper] == sidecar
+
+
+def test_find_orphan_sidecars(tmp_path):
+    media = tmp_path / "Photos from 2020" / "photo.jpg"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"photo")
+    matched = tmp_path / "Photos from 2020" / "photo.jpg.json"
+    matched.write_text("{}", encoding="utf-8")
+    orphan = tmp_path / "Photos from 2020" / "missing.jpg.json"
+    orphan.write_text("{}", encoding="utf-8")
+
+    sidecar_map = {media: matched}
+    orphans = find_orphan_sidecars([matched, orphan], sidecar_map)
+
+    assert orphans == [orphan]
 
 
 def test_canonical_source_label(tmp_path):

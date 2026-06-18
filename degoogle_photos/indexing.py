@@ -341,6 +341,17 @@ def resolve_sidecars(
     return resolved
 
 
+def find_orphan_sidecars(
+    all_sidecars: List[Path],
+    sidecar_map: Dict[Path, Optional[Path]],
+) -> List[Path]:
+    """Sidecars on disk that are not linked to any scanned media file."""
+    matched = {s for s in sidecar_map.values() if s is not None}
+    orphans = [s for s in all_sidecars if s not in matched]
+    orphans.sort(key=lambda p: (str(p.parent).lower(), p.name.lower()))
+    return orphans
+
+
 def find_all_media_files(source_root: Path, media_extensions: Set[str]) -> List[Path]:
     """
     Recursively find all media files under source_root (album subfolders of Google Photos/).

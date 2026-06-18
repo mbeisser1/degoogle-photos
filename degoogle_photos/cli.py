@@ -12,6 +12,7 @@ from .indexing import (
     summarize_canonical_coverage,
     format_outside_expected_locations,
     resolve_sidecars,
+    find_orphan_sidecars,
     validate_source_root,
 )
 from .dates import extract_date
@@ -67,6 +68,7 @@ def run(args):
     print(f"\nPhase 2: Computing checksums ({hash_workers} workers)...")
     progress_interval = max(1, len(files) // 200)  # ~200 progress updates
     hash_start = time.time()
+    orphan_sidecars: list = []
 
     def _progress(current, total):
         report.scanned = current
@@ -85,6 +87,8 @@ def run(args):
         dup_groups = group_duplicates_from_hashes(file_md5)
         keeper_map = keeper_for_files(files, file_md5, dup_groups)
         sidecar_map = resolve_sidecars(files, file_md5)
+        orphan_sidecars = find_orphan_sidecars(sidecars, sidecar_map)
+        report.set_orphan_sidecars(orphan_sidecars)
     except Exception as e:
         print(f"\nERROR during scan: {e}")
         raise SystemExit(1)
@@ -96,6 +100,15 @@ def run(args):
             f"  Checksums computed in {_format_duration(hash_elapsed)} "
             f"({avg_rate:.0f} files/sec avg)"
         )
+
+    if orphan_sidecars:
+        print(
+            f"  WARNING: {len(orphan_sidecars)} JSON sidecar(s) with no matching media file:"
+        )
+        for path in orphan_sidecars[:20]:
+            print(f"    {path}")
+        if len(orphan_sidecars) > 20:
+            print(f"    … and {len(orphan_sidecars) - 20} more")
 
     # Build the set of files that are duplicates (all but the keeper per group)
     skipped_paths = set()

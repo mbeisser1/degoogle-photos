@@ -111,9 +111,13 @@ class DedupReport:
             lambda: defaultdict(lambda: defaultdict(int))
         )
         self.canonical_coverage: dict = {}
+        self.orphan_sidecars: list = []
 
     def set_canonical_coverage(self, stats: dict):
         self.canonical_coverage = stats
+
+    def set_orphan_sidecars(self, paths: list):
+        self.orphan_sidecars = [str(p) for p in paths]
 
     def record_source_path(self, media_path: Path):
         """Count a scanned source path by canonical category, album, and media type."""
@@ -221,6 +225,11 @@ class DedupReport:
             html.append(f'<div class="stat"><span class="num">{sidecars_copied}</span><span class="label">JSON sidecars copied</span></div>')
         if sidecars_symlink:
             html.append(f'<div class="stat"><span class="num">{sidecars_symlink}</span><span class="label">JSON sidecars symlinked</span></div>')
+        if self.orphan_sidecars:
+            html.append(
+                f'<div class="stat"><span class="num">{len(self.orphan_sidecars)}</span>'
+                f'<span class="label">Unmatched sidecars</span></div>'
+            )
         html.append(f'<div class="stat"><span class="num">{_fmt_bytes(wasted_bytes)}</span><span class="label">Disk space saved</span></div>')
         cov = self.canonical_coverage
         if cov:
@@ -243,6 +252,21 @@ class DedupReport:
 
         html.extend(self._render_source_origin_section())
         html.extend(self._render_output_distribution_section())
+
+        if self.orphan_sidecars:
+            html.append(
+                '<section class="errors"><h2>Unmatched JSON sidecars</h2>'
+                '<p class="updated">These sidecar files were found in the source tree '
+                'but could not be matched to any scanned media file.</p>'
+            )
+            html.append('<table><tr><th>Path</th></tr>')
+            for path in self.orphan_sidecars[:100]:
+                html.append(f'<tr><td>{_html_escape(path)}</td></tr>')
+            if len(self.orphan_sidecars) > 100:
+                html.append(
+                    f'<tr><td>... and {len(self.orphan_sidecars) - 100} more</td></tr>'
+                )
+            html.append('</table></section>')
 
         # Duplicate groups
         if self.groups:

@@ -321,6 +321,22 @@ def test_collision_resolution(tmp_path):
 # Edge cases
 # ---------------------------------------------------------------------------
 
+def test_orphan_sidecar_warning(tmp_path, capsys):
+    src = tmp_path / "Google Photos" / "Photos from 2020"
+    src.mkdir(parents=True)
+    (src / "IMG_20200510_120000.jpg").write_bytes(b"photo")
+    (src / "orphan.jpg.json").write_text("{}", encoding="utf-8")
+    out = tmp_path / "output"
+
+    run(make_args(src.parent, out))
+
+    captured = capsys.readouterr()
+    assert "WARNING: 1 JSON sidecar(s) with no matching media file" in captured.out
+    assert "orphan.jpg.json" in captured.out
+    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    assert "Unmatched JSON sidecars" in html
+
+
 def test_invalid_source_exits(tmp_path):
     with pytest.raises(SystemExit):
         run(make_args(tmp_path / "nonexistent", tmp_path / "out"))

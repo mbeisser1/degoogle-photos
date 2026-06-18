@@ -45,6 +45,19 @@ def test_dedup_report_lists_sidecars_inline_and_orphans(tmp_path):
     assert "OTHER.jpg.json" in html
 
 
+def test_dedup_report_lists_unmatched_sidecars(tmp_path):
+    report = DedupReport(tmp_path / "out", dry_run=False)
+    report.set_orphan_sidecars([
+        tmp_path / "Photos from 2020" / "orphan.jpg.json",
+    ])
+    report.write()
+
+    html = (tmp_path / "out" / "report" / "index.html").read_text(encoding="utf-8")
+    assert "Unmatched JSON sidecars" in html
+    assert "orphan.jpg.json" in html
+    assert "Unmatched sidecars" in html
+
+
 def test_dedup_report_source_origins_and_output_distribution(tmp_path):
     out = tmp_path / "out"
     report = DedupReport(out, dry_run=False)
