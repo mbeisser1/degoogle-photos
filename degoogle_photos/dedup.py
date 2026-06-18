@@ -1,11 +1,19 @@
 """Deduplication via MD5 hashing."""
 
 import hashlib
+import os
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .indexing import keeper_sort_key
+
+
+def _default_hash_workers() -> int:
+    """Thread count for parallel file reads + MD5 (I/O-bound on typical storage)."""
+    return min(32, (os.cpu_count() or 4) + 4)
 
 
 def compute_md5(file_path: Path) -> str:
@@ -23,14 +31,35 @@ def compute_md5(file_path: Path) -> str:
 def hash_files(
     files: List[Path],
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    workers: Optional[int] = None,
 ) -> Dict[Path, str]:
-    """Compute MD5 for every file. Returns {path: md5}."""
-    result: Dict[Path, str] = {}
+    """Compute MD5 for every file in parallel. Returns {path: md5}."""
     total = len(files)
-    for i, fpath in enumerate(files, 1):
-        result[fpath] = compute_md5(fpath)
+    if total == 0:
+        return {}
+
+    if total == 1:
+        result = {files[0]: compute_md5(files[0])}
         if progress_cb:
-            progress_cb(i, total)
+            progress_cb(1, 1)
+        return result
+
+    worker_count = max(1, min(workers or _default_hash_workers(), total))
+    result: Dict[Path, str] = {}
+    completed = 0
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_path = {executor.submit(compute_md5, fpath): fpath for fpath in files}
+        for future in as_completed(future_to_path):
+            fpath = future_to_path[future]
+            md5 = future.result()
+            with lock:
+                result[fpath] = md5
+                completed += 1
+                if progress_cb:
+                    progress_cb(completed, total)
+
     return result
 
 

@@ -27,6 +27,7 @@ from .copy import (
 )
 from .report import DedupReport
 from .verify import verify_dedup_output, print_verify_result, LinkEntry
+from .archive import create_rar_archive, rar_archive_path
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -225,6 +226,16 @@ def run(args):
     report.symlink_count = link_count
     report.write()
 
+    archive_path = None
+    if not dry_run:
+        print(f"\nPhase 6: Archiving '{output_root.resolve()}'...")
+        try:
+            archive_path = create_rar_archive(output_root)
+            print(f"  Created {archive_path}")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            raise SystemExit(1)
+
     elapsed = time.time() - start
     report_index = report.report_dir / "index.html"
 
@@ -249,6 +260,8 @@ def run(args):
     print(f"\nDate folders: {output_root.resolve()}")
     print(f"By folder:    {by_folder_root.resolve()}")
     print(f"Report:       {report_index.resolve()}")
+    if archive_path:
+        print(f"Archive:      {archive_path.resolve()}")
     if report_index.exists():
         webbrowser.open(report_index.resolve().as_uri())
 

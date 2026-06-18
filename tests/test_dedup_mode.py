@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from degoogle_photos.archive import rar_archive_path
 from degoogle_photos.cli import run
 
 
@@ -13,6 +14,15 @@ from degoogle_photos.cli import run
 def no_browser(monkeypatch):
     """Prevent tests from opening a web browser."""
     monkeypatch.setattr("webbrowser.open", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def skip_rar_archive(monkeypatch):
+    """Integration tests do not run rar."""
+    monkeypatch.setattr(
+        "degoogle_photos.cli.create_rar_archive",
+        lambda output_root: rar_archive_path(output_root),
+    )
 
 
 def make_args(source, output, dry_run=False):

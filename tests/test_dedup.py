@@ -95,6 +95,20 @@ def test_group_duplicates_progress_callback(tmp_path):
 
     assert len(calls) == 5
     assert calls[-1] == (5, 5)
+    assert sorted(cur for cur, _ in calls) == [1, 2, 3, 4, 5]
+
+
+def test_hash_files_parallel_matches_sequential(tmp_path):
+    files = []
+    for i in range(8):
+        f = tmp_path / f"file{i}.bin"
+        f.write_bytes(f"payload-{i}".encode())
+        files.append(f)
+
+    sequential = hash_files(files, workers=1)
+    parallel = hash_files(files)
+
+    assert sequential == parallel
 
 
 def test_keeper_for_files_maps_duplicates_to_shortest_path(tmp_path):

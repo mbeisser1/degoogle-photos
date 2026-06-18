@@ -1,6 +1,6 @@
 # Degoogle-Photos
 
-Deduplicate a Google Photos/ Takeout export into `YYYY/MM/` folders, mirror the original album layout under `by-folder/` symlinks, and generate an HTML report.
+Deduplicate a Google Photos/ Takeout export into `YYYY/MM/` folders, mirror the original album layout under `by-folder/` symlinks, generate an HTML report, and archive the result as split RAR5 volumes.
 
 Fork of [couzteau/Degoogle-Photos](https://github.com/couzteau/Degoogle-Photos). See [Changes from upstream](#changes-from-upstream) below.
 
@@ -25,21 +25,7 @@ Use `python3 dedup_photos.py` or `python3 -m degoogle_photos.cli` if the `degoog
 
 Runs are resumable — already-copied files are skipped on restart.
 
-## Archiving (Linux)
-
-Store a copy of the output (or source tree) as split RAR5 volumes with no compression and BLAKE2 checksums. Requires [RAR for Linux](https://www.rarlab.com/download.htm).
-
-```bash
-rar a -ma5 -m0 -v2g -htb -r /path/to/archive.rar /path/to/output/
-```
-
-| Switch | Meaning |
-|--------|---------|
-| `-ma5` | RAR 5.0 archive format |
-| `-m0` | Store only (no compression) |
-| `-v2g` | Split into 2 GB volumes (`archive.part001.rar`, …) |
-| `-htb` | BLAKE2 file checksums (requires RAR5) |
-| `-r` | Recurse subdirectories |
+Requires [RAR for Linux](https://www.rarlab.com/download.htm) on your PATH (`rar` command). After dedup finishes, the tool writes `<output>.rar` (and `<output>.part001.rar`, … volumes when the archive exceeds 2 GB).
 
 ## Behaviour
 
@@ -49,6 +35,7 @@ One copy per duplicate group lands in `YYYY/MM/`; the original Takeout album lay
 - **Symlinks:** Every source path gets a symlink in `by-folder/`, including duplicates and sidecars. Duplicates point at the keeper's file in `YYYY/MM/`.
 - **Sidecars:** JSON sidecars (including `.supplemental-metadata.json`) are used for dates, copied as `filename.json` next to the keeper, and symlinked in `by-folder/` under their original names. Full JSON is preserved for a future metadata pass — nothing is embedded into the media files.
 - **Verification:** After writing files, checks that `by-folder/` has one symlink per source media path and JSON sidecar, that each symlink resolves correctly, and that no unexpected symlinks exist.
+- **Archive:** Writes `<output_dir>.rar` using RAR 5.0, store-only (`-m0`), 2 GB volumes (`-v2g`), BLAKE2 checksums (`-htb`), 3% recovery record (`-rr3`), recursion (`-r`). Symlinks are followed so `by-folder/` paths are stored as real files.
 
 ## Options
 
@@ -56,7 +43,7 @@ One copy per duplicate group lands in `YYYY/MM/`; the original Takeout album lay
 |------|---------|-------------|
 | `--source PATH` | `.` | Google Photos/ folder from Takeout |
 | `--output PATH` | `./DeGoogled Photos` | Output directory |
-| `--dry-run` | off | Report only, no copies |
+| `--dry-run` | off | Report only, no copies or archive |
 
 ## Changes from upstream
 
