@@ -337,6 +337,32 @@ def test_orphan_sidecar_warning(tmp_path, capsys):
     assert "Unmatched JSON sidecars" in html
 
 
+def test_dedup_groups_same_name_by_sidecar_timestamp(tmp_path):
+    """Named album copy with matching sidecar date dedups against Photos from YYYY."""
+    src = tmp_path / "Google Photos"
+    (src / "Photos from 2017").mkdir(parents=True)
+    (src / "2017-07 Augusta, Keck 4th of July").mkdir(parents=True)
+    ts = "1499625600"
+    (src / "Photos from 2017" / "IMG_0466.jpg").write_bytes(b"canonical-bytes")
+    (src / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg").write_bytes(b"album-bytes")
+    for media in (
+        src / "Photos from 2017" / "IMG_0466.jpg",
+        src / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg",
+    ):
+        sidecar = media.parent / f"{media.name}.supplemental-metadata.json"
+        sidecar.write_text(json.dumps({
+            "title": media.name,
+            "photoTakenTime": {"timestamp": ts, "formatted": "Jun 9, 2017"},
+        }), encoding="utf-8")
+    out = tmp_path / "output"
+
+    run(make_args(src, out))
+
+    copied = media_files_in_output(out)
+    assert len([p for p in copied if p.name.lower() == "img_0466.jpg"]) == 1
+    assert len(symlinks_in_by_folder(out)) == 4
+
+
 def test_invalid_source_exits(tmp_path):
     with pytest.raises(SystemExit):
         run(make_args(tmp_path / "nonexistent", tmp_path / "out"))

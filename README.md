@@ -33,7 +33,7 @@ One copy per duplicate group lands in `YYYY/MM/`; the original Takeout album lay
 
 - **Keeper selection:** `Archive` → `Locked Folder` → `Photos from YYYY` → named albums. Shortest path breaks ties within the same tier.
 - **Symlinks:** Every source path gets a symlink in `by-folder/`, including duplicates and sidecars. Duplicates point at the keeper's file in `YYYY/MM/`.
-- **Sidecars:** JSON sidecars (including `.supplemental-metadata.json`) are used for dates, copied as `filename.json` next to the keeper, and symlinked in `by-folder/` under their original names. Sidecar fields (capture time, GPS, description, title) are also embedded into copied media via ExifTool when available, with a piexif/Pillow fallback for JPEG/PNG/TIFF.
+- **Sidecars:** JSON sidecars (including `.supplemental-metadata.json`) are used for dates, copied as `filename.json` next to the keeper, and symlinked in `by-folder/` under their original names. Duplicate detection also matches same-named copies across folders when sidecar `photoTakenTime` agrees, even if Takeout stored different file bytes. Sidecar fields (capture time, GPS, description, title) are embedded into copied media via ExifTool when available, with a piexif/Pillow fallback for JPEG/PNG/TIFF.
 - **Verification:** After writing files, checks that `by-folder/` has one symlink per source media path and JSON sidecar, that each symlink resolves correctly, and that no unexpected symlinks exist.
 - **Archive:** Writes `<output_dir>.rar` using RAR 5.0, store-only (`-m0`), 2 GB volumes (`-v2g`), BLAKE2 checksums (`-htb`), 3% recovery record (`-rr3`), recursion (`-r`). Symlinks are followed so `by-folder/` paths are stored as real files.
 

@@ -1,5 +1,6 @@
 """Tests for degoogle_photos.dedup."""
 
+import json
 from pathlib import Path
 
 from degoogle_photos.dedup import (
@@ -185,3 +186,49 @@ def test_group_duplicates_prefers_locked_folder_over_named_album(tmp_path):
 
     groups = group_duplicates([album, locked])
     assert groups[0][1][0] == locked
+
+
+def test_group_duplicates_same_name_different_bytes_same_sidecar_ts(tmp_path):
+    year = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
+    album = tmp_path / "2017-07 Trip" / "IMG_0466.jpg"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    year.write_bytes(b"bytes-a")
+    album.write_bytes(b"bytes-b")
+    ts = "1499625600"
+    for media in (year, album):
+        sidecar = media.parent / f"{media.name}.json"
+        sidecar.write_text(json.dumps({
+            "title": media.name,
+            "photoTakenTime": {"timestamp": ts},
+        }), encoding="utf-8")
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    adjacent = {f: f.parent / f"{f.name}.json" for f in files}
+    groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
+
+    assert len(groups) == 1
+    assert set(groups[0][1]) == {year, album}
+    assert groups[0][1][0] == year
+
+
+def test_group_duplicates_same_name_different_sidecar_ts_not_grouped(tmp_path):
+    f2017 = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
+    f2023 = tmp_path / "Photos from 2023" / "IMG_0466.jpg"
+    f2017.parent.mkdir(parents=True)
+    f2023.parent.mkdir(parents=True)
+    f2017.write_bytes(b"photo-2017")
+    f2023.write_bytes(b"photo-2023")
+    for media, ts in ((f2017, "1499625600"), (f2023, "1696118400")):
+        sidecar = media.parent / f"{media.name}.json"
+        sidecar.write_text(json.dumps({
+            "photoTakenTime": {"timestamp": ts},
+        }), encoding="utf-8")
+
+    files = [f2017, f2023]
+    file_md5 = hash_files(files)
+    adjacent = {f: f.parent / f"{f.name}.json" for f in files}
+    groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
+
+    assert groups == []

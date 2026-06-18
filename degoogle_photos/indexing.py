@@ -4,7 +4,9 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
+
+from .metadata import media_identity_key
 
 # Google Takeout folders that typically hold the canonical copy of a photo.
 # Lower priority number = preferred keeper when deduplicating.
@@ -104,38 +106,50 @@ def keeper_sort_key(media_path: Path) -> tuple:
     return (canonical_source_priority(media_path), len(str(media_path)), str(media_path))
 
 
-def _canonical_basenames(files: List[Path]) -> Set[str]:
-    """Lowercase basenames of media files under canonical Takeout folders."""
-    return {
-        fpath.name.lower()
-        for fpath in files
-        if canonical_source_priority(fpath) < 3
-    }
+def _canonical_identity_keys(
+    files: List[Path],
+    sidecar_map: Dict[Path, Optional[Path]],
+) -> Set[Tuple[str, ...]]:
+    """Sidecar identity keys for media under canonical Takeout folders."""
+    keys: Set[Tuple[str, ...]] = set()
+    for fpath in files:
+        if canonical_source_priority(fpath) >= 3:
+            continue
+        key = media_identity_key(fpath, sidecar_map.get(fpath))
+        if len(key) == 2:
+            keys.add(key)
+    return keys
 
 
 def group_has_canonical_copy(
     paths: List[Path],
+    sidecar_map: Dict[Path, Optional[Path]],
     *,
-    canonical_basenames: Optional[Set[str]] = None,
+    canonical_identity_keys: Optional[Set[Tuple[str, ...]]] = None,
 ) -> bool:
     """
     True when a duplicate group has a canonical Takeout copy.
 
-    Checks MD5-group paths first, then whether the same basename (case-insensitive)
-    exists under Archive, Locked Folder, or Photos from YYYY elsewhere in the export.
-    Takeout sometimes stores slightly different bytes for the same photo across folders.
+    Checks group members in canonical folders first, then whether another file
+    with the same basename and sidecar capture time exists under Archive,
+    Locked Folder, or Photos from YYYY.
     """
     if any(canonical_source_priority(p) < 3 for p in paths):
         return True
-    if not canonical_basenames:
+    if not canonical_identity_keys:
         return False
-    return any(p.name.lower() in canonical_basenames for p in paths)
+    for path in paths:
+        key = media_identity_key(path, sidecar_map.get(path))
+        if len(key) == 2 and key in canonical_identity_keys:
+            return True
+    return False
 
 
 def summarize_canonical_coverage(
     files: List[Path],
     file_md5: Dict[Path, str],
     keeper_map: Dict[Path, Path],
+    sidecar_map: Dict[Path, Optional[Path]],
 ) -> dict:
     """
     Summarize how source paths relate to canonical Takeout folders.
@@ -143,28 +157,24 @@ def summarize_canonical_coverage(
     - named_album_paths: every scanned path under a user-named album folder
     - named_album_references: named-album paths that duplicate a keeper elsewhere
     - unique_photos_only_named: distinct photos with no copy in Archive,
-      Locked Folder, or Photos from YYYY (by content or matching basename)
+      Locked Folder, or Photos from YYYY (by MD5 or matching sidecar identity)
     - outside_expected_keepers: one keeper path per such photo (for listing)
     """
-    md5_to_paths: Dict[str, List[Path]] = defaultdict(list)
-    for fpath, md5 in file_md5.items():
-        md5_to_paths[md5].append(fpath)
+    groups_by_keeper: Dict[Path, List[Path]] = defaultdict(list)
+    for fpath in files:
+        groups_by_keeper[keeper_map[fpath]].append(fpath)
 
-    canonical_basenames = _canonical_basenames(files)
-    seen_md5: set[str] = set()
+    canonical_keys = _canonical_identity_keys(files, sidecar_map)
     unique_photos_only_named = 0
     outside_expected_keepers: List[Path] = []
-    for fpath in files:
-        md5 = file_md5[fpath]
-        if md5 in seen_md5:
-            continue
-        seen_md5.add(md5)
+    for keeper, group in groups_by_keeper.items():
         if not group_has_canonical_copy(
-            md5_to_paths[md5],
-            canonical_basenames=canonical_basenames,
+            group,
+            sidecar_map,
+            canonical_identity_keys=canonical_keys,
         ):
             unique_photos_only_named += 1
-            outside_expected_keepers.append(keeper_map[fpath])
+            outside_expected_keepers.append(keeper)
 
     named_album_paths = 0
     named_album_references = 0
@@ -341,26 +351,31 @@ def find_sidecar_for_media(media_path: Path) -> Optional[Path]:
 
 def resolve_sidecars(
     files: List[Path],
-    file_md5: Dict[Path, str],
+    dup_groups: Optional[List[Tuple[str, List[Path]]]] = None,
+    adjacent: Optional[Dict[Path, Optional[Path]]] = None,
 ) -> Dict[Path, Optional[Path]]:
     """
     Map each media file to a sidecar path for date extraction and copying.
 
     Uses the adjacent sidecar when present; otherwise borrows one from another
-    file in the same MD5 duplicate group.
+    file in the same duplicate group (MD5 or sidecar identity).
     """
-    md5_to_paths: Dict[str, List[Path]] = defaultdict(list)
-    for fpath, md5 in file_md5.items():
-        md5_to_paths[md5].append(fpath)
+    if adjacent is None:
+        adjacent = {fpath: find_sidecar_for_media(fpath) for fpath in files}
 
-    adjacent = {fpath: find_sidecar_for_media(fpath) for fpath in files}
+    cluster_for_path: Dict[Path, List[Path]] = {fpath: [fpath] for fpath in files}
+    if dup_groups:
+        for _group_id, group in dup_groups:
+            for fpath in group:
+                cluster_for_path[fpath] = group
+
     resolved: Dict[Path, Optional[Path]] = {}
     for fpath in files:
         if adjacent[fpath]:
             resolved[fpath] = adjacent[fpath]
             continue
-        for sibling in md5_to_paths[file_md5[fpath]]:
-            if adjacent[sibling]:
+        for sibling in cluster_for_path[fpath]:
+            if sibling != fpath and adjacent.get(sibling):
                 resolved[fpath] = adjacent[sibling]
                 break
         else:

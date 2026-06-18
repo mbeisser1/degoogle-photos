@@ -1,5 +1,6 @@
 """Tests for degoogle_photos.indexing."""
 
+import json
 import pytest
 from pathlib import Path
 
@@ -21,6 +22,15 @@ from degoogle_photos.indexing import (
     format_outside_expected_locations,
     keeper_sort_key,
 )
+
+
+def _write_sidecar(media_path: Path, timestamp: str) -> Path:
+    sidecar = media_path.parent / f"{media_path.name}.supplemental-metadata.json"
+    sidecar.write_text(json.dumps({
+        "title": media_path.name,
+        "photoTakenTime": {"timestamp": timestamp},
+    }), encoding="utf-8")
+    return sidecar
 
 
 def test_looks_like_google_photos_takeout_by_name(tmp_path):
@@ -187,7 +197,7 @@ def test_find_sidecar_live_photo_heic_vs_mp4(tmp_path):
 
 
 def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
-    from degoogle_photos.dedup import hash_files
+    from degoogle_photos.dedup import hash_files, group_duplicates_from_hashes
 
     keeper = tmp_path / "short.jpg"
     dupe = tmp_path / "nested" / "longer.jpg"
@@ -200,7 +210,8 @@ def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
 
     files = [keeper, dupe]
     file_md5 = hash_files(files)
-    resolved = resolve_sidecars(files, file_md5)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    resolved = resolve_sidecars(files, dup_groups=dup_groups)
 
     assert resolved[dupe] == sidecar
     assert resolved[keeper] == sidecar
@@ -254,17 +265,19 @@ def test_summarize_canonical_coverage_named_album_is_reference(tmp_path):
 
     files = [year, album]
     file_md5 = hash_files(files)
-    dup_groups = group_duplicates_from_hashes(file_md5)
+    adjacent = {f: find_sidecar_for_media(f) for f in files}
+    dup_groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
     keeper_map = keeper_for_files(files, file_md5, dup_groups)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups, adjacent=adjacent)
 
-    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map, sidecar_map)
     assert stats["named_album_paths"] == 1
     assert stats["named_album_references"] == 1
     assert stats["unique_photos_only_named"] == 0
 
 
-def test_summarize_canonical_coverage_matches_canonical_by_basename(tmp_path):
-    """Same filename in Photos from YYYY counts even when file bytes differ."""
+def test_summarize_canonical_coverage_matches_canonical_by_sidecar_identity(tmp_path):
+    """Same filename and sidecar capture time counts even when file bytes differ."""
     from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
 
     year = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
@@ -273,34 +286,48 @@ def test_summarize_canonical_coverage_matches_canonical_by_basename(tmp_path):
     album.parent.mkdir(parents=True)
     year.write_bytes(b"canonical-bytes")
     album.write_bytes(b"named-album-bytes-differ")
+    _write_sidecar(year, "1499625600")
+    _write_sidecar(album, "1499625600")
 
     files = [year, album]
     file_md5 = hash_files(files)
-    dup_groups = group_duplicates_from_hashes(file_md5)
+    adjacent = {f: find_sidecar_for_media(f) for f in files}
+    dup_groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
     keeper_map = keeper_for_files(files, file_md5, dup_groups)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups, adjacent=adjacent)
 
-    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map, sidecar_map)
     assert stats["unique_photos_only_named"] == 0
     assert stats["outside_expected_keepers"] == []
 
 
-def test_summarize_canonical_coverage_matches_canonical_basename_case_insensitive(tmp_path):
+def test_summarize_canonical_coverage_distinguishes_same_name_different_dates(tmp_path):
+    """IMG_0466 from 2017 and 2023 are different photos despite the same filename."""
     from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
 
-    year = tmp_path / "Photos from 2023" / "IMG_0466.JPG"
-    album = tmp_path / "2023-10 Greece & Isles" / "IMG_0466.JPG"
-    year.parent.mkdir(parents=True)
-    album.parent.mkdir(parents=True)
-    year.write_bytes(b"uppercase-ext-canonical")
-    album.write_bytes(b"uppercase-ext-album")
+    year2017 = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
+    year2023 = tmp_path / "Photos from 2023" / "IMG_0466.JPG"
+    album2023 = tmp_path / "2023-10 Greece & Isles" / "IMG_0466.JPG"
+    for p in (year2017, year2023, album2023):
+        p.parent.mkdir(parents=True, exist_ok=True)
+    year2017.write_bytes(b"2017-photo")
+    year2023.write_bytes(b"2023-canonical")
+    album2023.write_bytes(b"2023-album-copy")
+    _write_sidecar(year2017, "1499625600")
+    _write_sidecar(year2023, "1696118400")
+    _write_sidecar(album2023, "1696118400")
 
-    files = [year, album]
+    files = [year2017, year2023, album2023]
     file_md5 = hash_files(files)
-    dup_groups = group_duplicates_from_hashes(file_md5)
+    adjacent = {f: find_sidecar_for_media(f) for f in files}
+    dup_groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
     keeper_map = keeper_for_files(files, file_md5, dup_groups)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups, adjacent=adjacent)
 
-    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map, sidecar_map)
     assert stats["unique_photos_only_named"] == 0
+    assert len(dup_groups) == 1
+    assert set(dup_groups[0][1]) == {year2023, album2023}
 
 
 def test_summarize_canonical_coverage_only_in_named_album(tmp_path):
@@ -312,10 +339,12 @@ def test_summarize_canonical_coverage_only_in_named_album(tmp_path):
 
     files = [album]
     file_md5 = hash_files(files)
-    dup_groups = group_duplicates_from_hashes(file_md5)
+    adjacent = {f: find_sidecar_for_media(f) for f in files}
+    dup_groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
     keeper_map = keeper_for_files(files, file_md5, dup_groups)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups, adjacent=adjacent)
 
-    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map, sidecar_map)
     assert stats["named_album_paths"] == 1
     assert stats["named_album_references"] == 0
     assert stats["unique_photos_only_named"] == 1

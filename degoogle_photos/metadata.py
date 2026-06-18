@@ -40,6 +40,38 @@ def _pick_datetime(data: dict) -> Optional[datetime]:
     )
 
 
+def sidecar_capture_timestamp(json_path: Optional[Path]) -> Optional[int]:
+    """UTC epoch seconds from photoTakenTime (fallback: creationTime), or None."""
+    data = load_sidecar(json_path) if json_path else None
+    if not data:
+        return None
+    for field in ("photoTakenTime", "creationTime"):
+        try:
+            ts = int(data[field]["timestamp"])
+            if ts > 0:
+                return ts
+        except (KeyError, ValueError, TypeError):
+            continue
+    return None
+
+
+def media_identity_key(
+    media_path: Path,
+    sidecar_path: Optional[Path],
+) -> Tuple[str, ...]:
+    """
+    Identity for matching same-named Takeout copies across folders.
+
+    Returns (basename_lower, timestamp) when the sidecar has a capture time,
+    otherwise (basename_lower,) so only byte-identical (MD5) copies group.
+    """
+    basename = media_path.name.lower()
+    ts = sidecar_capture_timestamp(sidecar_path)
+    if ts is not None:
+        return (basename, ts)
+    return (basename,)
+
+
 def _valid_coords(lat: float, lon: float) -> bool:
     return not (lat == 0.0 and lon == 0.0)
 

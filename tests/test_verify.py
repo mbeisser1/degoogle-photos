@@ -33,7 +33,7 @@ def _run_mini_dedup(tmp_path):
     file_md5 = hash_files(files)
     dup_groups = group_duplicates_from_hashes(file_md5)
     keeper_map = keeper_for_files(files, file_md5, dup_groups)
-    sidecar_map = resolve_sidecars(files, file_md5)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups)
     src_to_dest = {media: dest}
     src_to_json_dest = {media: json_dest}
 

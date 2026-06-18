@@ -8,6 +8,7 @@ from .constants import MEDIA_EXTENSIONS
 from .indexing import (
     find_all_media_files,
     find_all_sidecar_files,
+    find_sidecar_for_media,
     summarize_canonical_coverage,
     format_outside_expected_locations,
     resolve_sidecars,
@@ -38,6 +39,13 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m {secs}s"
     return f"{secs}s"
+
+
+_SUMMARY_LABEL_WIDTH = 27
+
+
+def _summary_line(label: str, value: str) -> str:
+    return f"{label:<{_SUMMARY_LABEL_WIDTH}} {value}"
 
 
 def run(args):
@@ -83,9 +91,14 @@ def run(args):
     try:
         file_md5 = hash_files(files, progress_cb=_progress, workers=hash_workers)
         hash_elapsed = time.time() - hash_start
-        dup_groups = group_duplicates_from_hashes(file_md5)
+        adjacent_sidecars = {fpath: find_sidecar_for_media(fpath) for fpath in files}
+        dup_groups = group_duplicates_from_hashes(
+            file_md5, sidecar_map=adjacent_sidecars,
+        )
         keeper_map = keeper_for_files(files, file_md5, dup_groups)
-        sidecar_map = resolve_sidecars(files, file_md5)
+        sidecar_map = resolve_sidecars(
+            files, dup_groups=dup_groups, adjacent=adjacent_sidecars,
+        )
         orphan_sidecars = find_orphan_sidecars(sidecars, sidecar_map)
         report.set_orphan_sidecars(orphan_sidecars)
     except Exception as e:
@@ -118,7 +131,9 @@ def run(args):
 
     dupe_file_count = len(skipped_paths)
     unique_count = len(files) - dupe_file_count
-    canonical_stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    canonical_stats = summarize_canonical_coverage(
+        files, file_md5, keeper_map, sidecar_map,
+    )
     report.set_canonical_coverage(canonical_stats)
     print(f"  Scanned {len(files)} files")
     if dupe_file_count:
@@ -264,21 +279,27 @@ def run(args):
     print(f"\n{'='*60}")
     print(f"{prefix}Summary")
     print(f"{'='*60}")
-    print(f"Paths scanned:           {report.scanned}")
-    print(f"Checksum time:           {format_duration(hash_elapsed)}")
+    print(_summary_line("Paths scanned:", str(report.scanned)))
+    print(_summary_line("Checksum time:", format_duration(hash_elapsed)))
     if archive_elapsed is not None:
-        print(f"Archive time:            {format_duration(archive_elapsed)}")
+        print(_summary_line("Archive time:", format_duration(archive_elapsed)))
     if dupe_file_count:
-        print(f"Duplicate paths skipped: {dupe_file_count}  (same photo / video in another folder)")
-    print(f"Photos copied:           {copied}")
-    print(f"Folder aliases:      {link_count}")
+        print(_summary_line(
+            "Duplicate paths skipped:",
+            f"{dupe_file_count}  (same photo / video in another folder)",
+        ))
+    print(_summary_line("Photos copied:", str(copied)))
+    print(_summary_line("Folder aliases:", str(link_count)))
     if errors:
-        print(f"Errors:              {errors}")
+        print(_summary_line("Errors:", str(errors)))
     if not dry_run and not verify_result.ok:
-        print(f"Verification:        FAILED ({len(verify_result.errors)} issue(s))")
+        print(_summary_line(
+            "Verification:",
+            f"FAILED ({len(verify_result.errors)} issue(s))",
+        ))
     elif not dry_run:
-        print(f"Verification:        passed")
-    print(f"Time elapsed:        {elapsed:.1f}s")
+        print(_summary_line("Verification:", "passed"))
+    print(_summary_line("Time elapsed:", format_duration(elapsed)))
     print(f"{'='*60}")
     print(f"Source:      {source_root}")
     print(f"\nDate folders: {output_root.resolve()}")

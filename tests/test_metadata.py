@@ -62,6 +62,20 @@ def test_pick_geo_skips_zero_zero():
     assert _pick_geo({"geoData": {"latitude": 0.0, "longitude": 0.0}}) is None
 
 
+def test_media_identity_key_uses_sidecar_timestamp(tmp_path):
+    from degoogle_photos.metadata import media_identity_key
+
+    sidecar = tmp_path / "IMG.jpg.json"
+    sidecar.write_text(json.dumps({"photoTakenTime": {"timestamp": "1499625600"}}))
+    assert media_identity_key(tmp_path / "IMG.jpg", sidecar) == ("img.jpg", 1499625600)
+
+
+def test_media_identity_key_without_timestamp(tmp_path):
+    from degoogle_photos.metadata import media_identity_key
+
+    assert media_identity_key(tmp_path / "IMG.jpg", None) == ("img.jpg",)
+
+
 def test_build_piexif_dict_includes_datetime_gps_description():
     exif_dict = _build_piexif_dict(_sample_sidecar())
     assert exif_dict is not None
