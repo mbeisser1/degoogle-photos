@@ -62,7 +62,7 @@ def _build_path_tree(path_to_types: dict) -> dict:
     """
     Build a nested tree from paths like '2021/05' -> type counts.
     Each node: {"types": {type: count}, "children": {name: node}}.
-  Leaf and ancestor nodes include rolled-up type totals.
+    Leaf and ancestor nodes include rolled-up type totals.
     """
     root = {"types": {}, "children": {}}
 

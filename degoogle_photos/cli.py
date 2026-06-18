@@ -27,7 +27,7 @@ from .copy import (
 )
 from .report import DedupReport
 from .verify import verify_dedup_output, print_verify_result, LinkEntry
-from .archive import create_rar_archive, rar_archive_path
+from .archive import create_rar_archive
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -53,10 +53,6 @@ def run(args):
     Scan --source, copy one keeper per unique MD5 to --output (date-organised),
     and recreate the source tree under by-folder/ as symlinks. Source is never modified.
     """
-    if not args.source.is_dir():
-        print(f"ERROR: --source '{args.source}' is not a directory.")
-        raise SystemExit(1)
-
     source_root = validate_source_root(args.source)
     output_root = args.output
     dry_run = args.dry_run
@@ -246,7 +242,7 @@ def run(args):
 
     archive_path = None
     archive_elapsed = None
-    if not dry_run:
+    if not dry_run and not args.skip_archive:
         print(f"\nPhase 6: Archiving '{output_root.resolve()}'...")
         archive_start = time.time()
         try:
@@ -286,7 +282,7 @@ def run(args):
     print(f"Report:       {report_index.resolve()}")
     if archive_path:
         print(f"Archive:      {archive_path.resolve()}")
-    if report_index.exists():
+    if report_index.exists() and not args.no_open_browser:
         webbrowser.open(report_index.resolve().as_uri())
 
 
@@ -295,7 +291,11 @@ def main():
         description="Deduplicate and organize Google Takeout photos into YYYY/MM/ with by-folder symlinks",
     )
     parser.add_argument("--dry-run", action="store_true",
-                        help="Report what would be done without copying or deleting")
+                        help="Report what would be done without copying or archiving")
+    parser.add_argument("--skip-archive", action="store_true",
+                        help="Skip RAR archive creation after a successful run")
+    parser.add_argument("--no-open-browser", action="store_true",
+                        help="Do not open the HTML report in a web browser")
     parser.add_argument("--source", type=Path, default=Path.cwd(),
                         help="Google Photos/ folder from a Takeout extract")
     parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogled Photos",

@@ -25,9 +25,14 @@ def skip_rar_archive(monkeypatch):
     )
 
 
-def make_args(source, output, dry_run=False, hash_workers=2):
+def make_args(source, output, dry_run=False, hash_workers=2, skip_archive=False, no_open_browser=True):
     return argparse.Namespace(
-        source=source, output=output, dry_run=dry_run, hash_workers=hash_workers,
+        source=source,
+        output=output,
+        dry_run=dry_run,
+        hash_workers=hash_workers,
+        skip_archive=skip_archive,
+        no_open_browser=no_open_browser,
     )
 
 

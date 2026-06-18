@@ -12,11 +12,6 @@ from .indexing import keeper_sort_key
 DEFAULT_HASH_WORKERS = 2
 
 
-def _default_hash_workers() -> int:
-    """Default thread count for parallel file reads + MD5 (HDD-friendly)."""
-    return DEFAULT_HASH_WORKERS
-
-
 def compute_md5(file_path: Path) -> str:
     """Compute MD5 hash of a file."""
     h = hashlib.md5()
@@ -45,7 +40,7 @@ def hash_files(
             progress_cb(1, 1)
         return result
 
-    worker_count = max(1, min(workers or _default_hash_workers(), total))
+    worker_count = max(1, min(workers or DEFAULT_HASH_WORKERS, total))
     result: Dict[Path, str] = {}
     completed = 0
     lock = threading.Lock()

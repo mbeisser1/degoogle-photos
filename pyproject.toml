@@ -9,7 +9,7 @@ description = "Organize Google Takeout photos into YYYY/MM/ folders with dedup a
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-authors = [{name = "Couzteau"}]
+authors = [{name = "Couzteau"}, {name = "mbeisser1"}]
 keywords = ["google-photos", "google-takeout", "photo-organizer", "degoogle", "privacy"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -31,9 +31,9 @@ dependencies = ["Pillow>=9.0"]
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/couzteau/Degoogle-Photos"
-Repository = "https://github.com/couzteau/Degoogle-Photos"
-Issues = "https://github.com/couzteau/Degoogle-Photos/issues"
+Homepage = "https://github.com/mbeisser1/degoogle-photos"
+Repository = "https://github.com/mbeisser1/degoogle-photos"
+Issues = "https://github.com/mbeisser1/degoogle-photos/issues"
 
 [tool.setuptools.packages.find]
 include = ["degoogle_photos*"]

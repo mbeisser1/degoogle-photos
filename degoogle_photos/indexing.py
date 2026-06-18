@@ -18,7 +18,7 @@ def looks_like_google_photos_takeout(source_root: Path) -> bool:
     True when source_root looks like an extracted Google Photos/ Takeout folder.
 
     Expects album subfolders (Archive, Locked Folder, Photos from YYYY, or named
-  albums) — not a flat directory of media files.
+    albums) — not a flat directory of media files.
     """
     if not source_root.is_dir():
         return False
@@ -255,7 +255,7 @@ def _sidecar_matches_media(
     Score how well a sidecar filename matches a media file (higher = better).
     Returns 0 when the sidecar does not belong to this media file.
 
-  Title from the JSON body is authoritative when present; filename-only
+    Title from the JSON body is authoritative when present; filename-only
     matching requires an exact media filename after stripping the sidecar suffix.
     """
     stripped = _strip_sidecar_suffix(sidecar_filename)
