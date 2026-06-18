@@ -29,6 +29,7 @@ from .copy import (
 )
 from .report import DedupReport
 from .verify import verify_dedup_output, print_verify_result, LinkEntry
+from .metadata import require_exiftool
 from .archive import create_rar_archive
 
 
@@ -56,6 +57,12 @@ def run(args):
     source_root = validate_source_root(args.source)
     output_root = args.output
     dry_run = args.dry_run
+
+    try:
+        require_exiftool()
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        raise SystemExit(1)
 
     report = DedupReport(output_root, dry_run)
     start = time.time()

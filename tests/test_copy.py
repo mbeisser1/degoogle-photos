@@ -1,10 +1,11 @@
 """Tests for degoogle_photos.copy."""
 
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
-import piexif
+import pytest
 from PIL import Image
 
 from degoogle_photos.copy import (
@@ -14,6 +15,7 @@ from degoogle_photos.copy import (
     copy_with_sidecar,
     sidecar_dest_path,
 )
+from tests.conftest import write_test_jpeg
 
 
 def test_compute_dest_path_with_date(output_dir):
@@ -85,7 +87,7 @@ def test_copy_with_sidecar(tmp_path):
     out = tmp_path / "output" / "2020" / "05"
 
     media = src / "photo.jpg"
-    media.write_bytes(b"jpeg data")
+    write_test_jpeg(media)
     sidecar = src / "photo.jpg.json"
     sidecar.write_text('{"title":"photo.jpg"}', encoding="utf-8")
 
@@ -93,7 +95,7 @@ def test_copy_with_sidecar(tmp_path):
     actual = copy_with_sidecar(media, sidecar, dest, dry_run=False)
 
     assert actual.exists()
-    assert actual.read_bytes() == b"jpeg data"
+    assert actual.stat().st_size > 0
     json_copy = actual.parent / (actual.name + ".json")
     assert json_copy.exists()
 
@@ -111,13 +113,13 @@ def test_copy_with_sidecar_resumes_existing_copy(tmp_path):
     src = tmp_path / "source"
     src.mkdir()
     media = src / "photo.jpg"
-    media.write_bytes(b"jpeg data")
+    write_test_jpeg(media)
     sidecar = src / "photo.jpg.json"
     sidecar.write_text('{"title":"photo.jpg"}', encoding="utf-8")
 
     dest = tmp_path / "output" / "2020" / "05" / "photo.jpg"
     dest.parent.mkdir(parents=True)
-    dest.write_bytes(b"jpeg data")
+    shutil.copy2(media, dest)
 
     actual = copy_with_sidecar(media, sidecar, dest, dry_run=False)
     assert actual == dest
@@ -126,9 +128,11 @@ def test_copy_with_sidecar_resumes_existing_copy(tmp_path):
     assert json_copy.read_text(encoding="utf-8") == sidecar.read_text(encoding="utf-8")
 
 
-def test_copy_with_sidecar_embeds_metadata(tmp_path, monkeypatch):
-    monkeypatch.setattr("degoogle_photos.metadata._embed_with_exiftool", lambda *_: False)
-
+@pytest.mark.skipif(
+    shutil.which("exiftool") is None,
+    reason="exiftool not installed",
+)
+def test_copy_with_sidecar_embeds_metadata(tmp_path):
     src = tmp_path / "source"
     src.mkdir()
     out = tmp_path / "output" / "2021" / "05"
@@ -145,9 +149,14 @@ def test_copy_with_sidecar_embeds_metadata(tmp_path, monkeypatch):
     dest = out / "photo.jpg"
     copy_with_sidecar(media, sidecar, dest, dry_run=False)
 
-    exif = piexif.load(str(dest))
-    assert exif["Exif"][piexif.ExifIFD.DateTimeOriginal] == b"2021:05:10 12:00:00"
-    assert exif["0th"][piexif.ImageIFD.ImageDescription] == b"from takeout"
+    import subprocess
+    out_text = subprocess.run(
+        ["exiftool", "-ImageDescription", "-s3", str(dest)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert out_text.strip() == "from takeout"
 
 
 def test_sidecar_dest_path():

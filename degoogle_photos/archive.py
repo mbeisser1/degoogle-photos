@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-RAR_SWITCHES = ("-ma5", "-m0", "-v2g", "-htb", "-rr3", "-r")
+RAR_SWITCHES = ("-ma5", "-m0", "-v2g", "-htb", "-rr1", "-r")
 
 
 def rar_archive_path(output_root: Path) -> Path:

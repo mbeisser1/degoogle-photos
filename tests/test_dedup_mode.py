@@ -2,12 +2,14 @@
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from degoogle_photos.archive import rar_archive_path
 from degoogle_photos.pipeline import run
+from tests.conftest import write_test_jpeg, write_test_webp
 
 
 @pytest.fixture(autouse=True)
@@ -171,7 +173,7 @@ def test_dedup_copies_sidecar_next_to_media(tmp_path):
     src = tmp_path / "Google Photos" / "Photos from 2021"
     src.mkdir(parents=True)
     media = src / "IMG_20210510_120000.WEBP"
-    media.write_bytes(b"webp-data")
+    write_test_webp(media)
     sidecar = src / "IMG_20210510_120000.WEBP.supplemental-metadata.json"
     sidecar.write_text(json.dumps({
         "title": "IMG_20210510_120000.WEBP",
@@ -191,7 +193,7 @@ def test_dedup_sidecar_symlinked_in_by_folder(tmp_path):
     src = tmp_path / "Google Photos" / "Photos from 2021"
     src.mkdir(parents=True)
     media = src / "IMG_20210510_120000.WEBP"
-    media.write_bytes(b"webp-data")
+    write_test_webp(media)
     sidecar = src / "IMG_20210510_120000.WEBP.supplemental-metadata.json"
     sidecar.write_text(json.dumps({
         "title": "IMG_20210510_120000.WEBP",
@@ -212,9 +214,9 @@ def test_dedup_duplicate_sidecar_symlinks_point_to_keeper_json(tmp_path):
     src.mkdir()
     (src / "Photos from 2020").mkdir()
     (src / "Vacation").mkdir()
-    content = b"duplicate-content"
-    (src / "Photos from 2020" / "IMG_20200601_090000.jpg").write_bytes(content)
-    (src / "Vacation" / "IMG_20200601_090000.jpg").write_bytes(content)
+    content_rgb = (40, 50, 60)
+    write_test_jpeg(src / "Photos from 2020" / "IMG_20200601_090000.jpg", rgb=content_rgb)
+    write_test_jpeg(src / "Vacation" / "IMG_20200601_090000.jpg", rgb=content_rgb)
     (src / "Vacation" / "IMG_20200601_090000.jpg.supplemental-metadata.json").write_text(
         json.dumps({
             "title": "IMG_20200601_090000.jpg",
@@ -343,8 +345,8 @@ def test_dedup_groups_same_name_by_sidecar_timestamp(tmp_path):
     (src / "Photos from 2017").mkdir(parents=True)
     (src / "2017-07 Augusta, Keck 4th of July").mkdir(parents=True)
     ts = "1499625600"
-    (src / "Photos from 2017" / "IMG_0466.jpg").write_bytes(b"canonical-bytes")
-    (src / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg").write_bytes(b"album-bytes")
+    write_test_jpeg(src / "Photos from 2017" / "IMG_0466.jpg", rgb=(100, 101, 102))
+    write_test_jpeg(src / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg", rgb=(200, 201, 202))
     for media in (
         src / "Photos from 2017" / "IMG_0466.jpg",
         src / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg",
@@ -361,6 +363,23 @@ def test_dedup_groups_same_name_by_sidecar_timestamp(tmp_path):
     copied = media_files_in_output(out)
     assert len([p for p in copied if p.name.lower() == "img_0466.jpg"]) == 1
     assert len(symlinks_in_by_folder(out)) == 4
+
+
+def test_missing_exiftool_exits(tmp_path, monkeypatch):
+    real_which = shutil.which
+
+    def fake_which(name):
+        if name == "exiftool":
+            return None
+        return real_which(name)
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    src = tmp_path / "Google Photos" / "Photos from 2020"
+    src.mkdir(parents=True)
+    (src / "IMG_20200510_120000.jpg").write_bytes(b"photo")
+
+    with pytest.raises(SystemExit):
+        run(make_args(src.parent, tmp_path / "output"))
 
 
 def test_invalid_source_exits(tmp_path):
