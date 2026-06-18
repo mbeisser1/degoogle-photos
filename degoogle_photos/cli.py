@@ -11,7 +11,13 @@ from pathlib import Path
 from .indexing import find_takeout_dirs, build_index, find_json_for_media, find_all_media_files
 from .dates import extract_date
 from .metadata import extract_metadata
-from .dedup import compute_md5, make_dedup_key, group_duplicates
+from .dedup import (
+    compute_md5,
+    make_dedup_key,
+    hash_files,
+    group_duplicates_from_hashes,
+    keeper_for_files,
+)
 from .copy import compute_dest_path, resolve_collision, is_already_copied, copy_with_sidecar
 from .albums import create_album_symlinks
 from .logging_util import MigrationLog
@@ -78,7 +84,9 @@ def _run_dedup(args):
             )
 
     try:
-        dup_groups = group_duplicates(files, progress_cb=_progress)
+        file_md5 = hash_files(files, progress_cb=_progress)
+        dup_groups = group_duplicates_from_hashes(file_md5)
+        keeper_map = keeper_for_files(files, file_md5, dup_groups)
     except Exception as e:
         print(f"\nERROR during scan: {e}")
         raise SystemExit(1)
@@ -134,7 +142,9 @@ def _run_dedup(args):
     action4 = "Would create" if dry_run else "Creating"
     print(f"\nPhase 4: {action4} folder aliases under '{by_folder_root}'...")
     link_count = 0
-    for src, dest in src_to_dest.items():
+    for src in files:
+        keeper = keeper_map[src]
+        dest = src_to_dest[keeper]
         src_root = file_to_source[src]
         rel = src.relative_to(src_root)
         link_path = by_folder_root / src_root.name / rel if multi_source else by_folder_root / rel
@@ -228,7 +238,7 @@ def main():
 
     # Phase 2-4: Process each media file
     print(f"\nPhase 2-4: Processing files{' (dry run)' if dry_run else ''}...")
-    seen_dedup_keys = set()
+    dedup_dest_by_key = {}  # dedup_key -> canonical destination path
 
     for i, (media_path, album_name) in enumerate(media_files, 1):
         try:
@@ -244,27 +254,29 @@ def main():
             # Compute destination
             dest_path = compute_dest_path(output_root, media_path, dt)
 
+            md5 = compute_md5(media_path)
+            dedup_key = make_dedup_key(md5, dt)
+
             # Check resumability
             if is_already_copied(media_path, dest_path):
                 log.skipped_resume += 1
                 log.log(f"SKIP_RESUME: {media_path} -> {dest_path}")
                 log.html.add_copied(dest_path, media_path, dt, date_source,
                                     album_name, json_path is not None, metadata)
+                dedup_dest_by_key.setdefault(dedup_key, dest_path)
                 album_files[album_name].append(dest_path)
                 log.progress(i, log.total)
                 continue
 
             # Deduplication
-            md5 = compute_md5(media_path)
-            dedup_key = make_dedup_key(md5, dt)
-
-            if dedup_key in seen_dedup_keys:
+            if dedup_key in dedup_dest_by_key:
                 log.skipped_dupes += 1
-                log.log(f"SKIP_DUPE: {media_path} (md5={md5})")
+                keeper_dest = dedup_dest_by_key[dedup_key]
+                log.log(f"SKIP_DUPE: {media_path} (md5={md5}) -> {keeper_dest}")
                 log.html.add_duplicate(media_path, md5)
+                album_files[album_name].append(keeper_dest)
                 log.progress(i, log.total)
                 continue
-            seen_dedup_keys.add(dedup_key)
 
             # Handle needs_review
             if dt is None:
@@ -276,11 +288,13 @@ def main():
                     log.html.add_copied(actual_dest, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
                     album_files[album_name].append(actual_dest)
+                    dedup_dest_by_key[dedup_key] = actual_dest
                 else:
                     log.log(f"REVIEW: {media_path} -> {dest_path}")
                     log.html.add_copied(dest_path, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
                     album_files[album_name].append(dest_path)
+                    dedup_dest_by_key[dedup_key] = dest_path
             else:
                 # Normal copy
                 if not dry_run:
@@ -289,11 +303,13 @@ def main():
                     log.html.add_copied(actual_dest, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
                     album_files[album_name].append(actual_dest)
+                    dedup_dest_by_key[dedup_key] = actual_dest
                 else:
                     log.log(f"COPY: {media_path} -> {dest_path} (date={dt})")
                     log.html.add_copied(dest_path, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
                     album_files[album_name].append(dest_path)
+                    dedup_dest_by_key[dedup_key] = dest_path
                 log.copied += 1
 
         except Exception as e:

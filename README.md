@@ -178,7 +178,7 @@ rsync -a --progress \
 1. **Scan** — Recursively find all media files across all `--source` folders
 2. **Checksum** — Compute MD5 for every file; group identical files together (across all sources)
 3. **Copy** — For each unique file (or duplicate group keeper), copy to `YYYY/MM/` using the same date-extraction cascade; name collisions get a `_2`, `_3` suffix
-4. **Symlinks** — Recreate each source folder tree under `by-folder/` (namespaced by source folder name when multiple sources are given) with relative symlinks pointing at the date-organised copies
+4. **Symlinks** — Recreate each source folder tree under `by-folder/` (namespaced by source folder name when multiple sources are given) with relative symlinks pointing at the date-organised copies. Duplicate paths also get symlinks; they point at the canonical copy kept during dedup.
 5. **Report** — Generate an HTML report listing all duplicate groups with COPIED / SKIPPED status per file
 
 ## HTML Report

@@ -3,7 +3,14 @@
 from datetime import datetime
 from pathlib import Path
 
-from degoogle_photos.dedup import compute_md5, make_dedup_key, group_duplicates
+from degoogle_photos.dedup import (
+    compute_md5,
+    make_dedup_key,
+    group_duplicates,
+    hash_files,
+    group_duplicates_from_hashes,
+    keeper_for_files,
+)
 
 
 def test_compute_md5(tmp_path):
@@ -112,3 +119,35 @@ def test_group_duplicates_progress_callback(tmp_path):
 
     assert len(calls) == 5
     assert calls[-1] == (5, 5)
+
+
+def test_keeper_for_files_maps_duplicates_to_shortest_path(tmp_path):
+    shallow = tmp_path / "orig.jpg"
+    deep = tmp_path / "sub" / "copy.jpg"
+    deep.parent.mkdir(parents=True)
+    content = b"same"
+    shallow.write_bytes(content)
+    deep.write_bytes(content)
+
+    files = [shallow, deep]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    assert keeper_map[shallow] == shallow
+    assert keeper_map[deep] == shallow
+
+
+def test_keeper_for_files_unique_files_map_to_self(tmp_path):
+    f1 = tmp_path / "a.jpg"
+    f2 = tmp_path / "b.jpg"
+    f1.write_bytes(b"aaa")
+    f2.write_bytes(b"bbb")
+
+    files = [f1, f2]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    assert keeper_map[f1] == f1
+    assert keeper_map[f2] == f2

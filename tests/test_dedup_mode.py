@@ -114,8 +114,8 @@ def test_date_folder_matches_filename_date(source, output):
 def test_by_folder_symlinks_created(source, output):
     _run_dedup(make_args(source, output))
     links = symlinks_in_by_folder(output)
-    # 3 unique files → 3 symlinks
-    assert len(links) == 3
+    # All 4 source files get symlinks (duplicates point at the keeper copy)
+    assert len(links) == 4
 
 
 def test_by_folder_mirrors_source_structure(source, output):
@@ -138,18 +138,15 @@ def test_by_folder_symlinks_resolve_to_date_files(source, output):
     assert "2020" in str(resolved)
 
 
-def test_by_folder_symlink_not_created_for_skipped_duplicate(source, output):
-    """The duplicate that was skipped should have no by-folder symlink."""
+def test_by_folder_duplicate_symlinks_point_to_keeper(source, output):
+    """Both copies of a duplicate get symlinks; the skipped one points at the keeper."""
     _run_dedup(make_args(source, output))
     by_folder = output / "by-folder"
-    # Both folders have IMG_20200601_090000.jpg in source, but only the keeper
-    # (shortest path = folderA) is copied; folderB's version was skipped.
     fA_link = by_folder / "folderA" / "IMG_20200601_090000.jpg"
     fB_link = by_folder / "folderB" / "IMG_20200601_090000.jpg"
-    # Exactly one of the two should exist (the keeper's link)
-    assert fA_link.exists() ^ fB_link.exists(), (
-        "Expected exactly one symlink for the duplicate pair"
-    )
+    assert fA_link.is_symlink()
+    assert fB_link.is_symlink()
+    assert fA_link.resolve() == fB_link.resolve()
 
 
 # ---------------------------------------------------------------------------
