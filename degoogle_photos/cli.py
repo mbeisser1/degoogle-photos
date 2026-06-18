@@ -1,40 +1,30 @@
-"""CLI entry point — orchestrates the full migration pipeline."""
+"""CLI entry point — deduplicate and organize Google Takeout photos."""
 
 import argparse
 import time
 import webbrowser
-from collections import defaultdict
 from pathlib import Path
 
 from .indexing import (
-    find_takeout_dirs,
-    build_index,
-    find_json_for_media,
     find_all_media_files,
     find_all_sidecar_files,
     summarize_canonical_coverage,
     format_outside_expected_locations,
     resolve_sidecars,
-    keeper_sort_key,
+    validate_source_root,
 )
 from .dates import extract_date
-from .metadata import extract_metadata
 from .dedup import (
-    compute_md5,
-    make_dedup_key,
     hash_files,
     group_duplicates_from_hashes,
     keeper_for_files,
 )
 from .copy import (
     compute_dest_path,
-    is_already_copied,
     copy_with_sidecar,
     sidecar_dest_path,
     ensure_symlink,
 )
-from .albums import create_album_symlinks
-from .logging_util import MigrationLog
 from .report import DedupReport
 from .verify import verify_dedup_output, print_verify_result, LinkEntry
 
@@ -47,13 +37,11 @@ MEDIA_EXTENSIONS = {
     ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg",
 }
 
-PROGRESS_INTERVAL = 500
 
-
-def _run_dedup(args):
+def run(args):
     """
-    Dedup mode: scan one or more --source folders, then copy one representative
-    file per unique MD5 to --output (date-organised). Source folders are never modified.
+    Scan --source folders, copy one keeper per unique MD5 to --output (date-organised),
+    and recreate the source tree under by-folder/ as symlinks. Source is never modified.
     """
     source_roots = [p.resolve() for p in args.source]
     output_root = args.output
@@ -64,6 +52,8 @@ def _run_dedup(args):
         if not src.is_dir():
             print(f"ERROR: --source '{src}' is not a directory.")
             raise SystemExit(1)
+
+    source_roots = [validate_source_root(src) for src in source_roots]
 
     report = DedupReport(output_root, dry_run)
     start = time.time()
@@ -264,7 +254,7 @@ def _run_dedup(args):
 
     prefix = "[DRY RUN] " if dry_run else ""
     print(f"\n{'='*60}")
-    print(f"{prefix}Dedup Summary")
+    print(f"{prefix}Summary")
     print(f"{'='*60}")
     print(f"Paths scanned:           {report.scanned}")
     if dupe_file_count:
@@ -290,141 +280,17 @@ def _run_dedup(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Migrate Google Takeout photos to YYYY/MM/ structure")
-    parser.add_argument("--dry-run", action="store_true", help="Report what would be done without copying or deleting")
+    parser = argparse.ArgumentParser(
+        description="Deduplicate and organize Google Takeout photos into YYYY/MM/ with by-folder symlinks",
+    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Report what would be done without copying or deleting")
     parser.add_argument("--source", type=Path, nargs="+", default=[Path.cwd()],
-                        help="One or more source folders. For migration: root containing Takeout dirs. "
-                             "For --dedup-scan: any folders to scan (repeat --source or space-separate).")
+                        help="Google Photos/ folder from a Takeout extract (repeat for multiple)")
     parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogled Photos",
-                        help="Output root for organized photos or dedup report (default: ./DeGoogled Photos)")
-
-    # Dedup mode
-    parser.add_argument("--dedup-scan", action="store_true",
-                        help="Copy deduplicated media files from --source to --output. "
-                             "One file is kept per duplicate group (canonical Takeout "
-                             "folders win: Archive, Locked Folder, Photos from YYYY). "
-                             "The source folder is never modified.")
-
+                        help="Output root (default: ./DeGoogled Photos)")
     args = parser.parse_args()
-
-    if args.dedup_scan:
-        if args.output == Path.cwd() / "DeGoogled Photos":
-            args.output = Path.cwd() / "Deduped Photos"
-        _run_dedup(args)
-        return
-
-    source_root = args.source[0]
-    output_root = args.output
-    dry_run = args.dry_run
-
-    log = MigrationLog(output_root, dry_run, progress_interval=PROGRESS_INTERVAL)
-
-    # Phase 1: Build global index
-    print("Phase 1: Scanning Takeout directories...")
-    takeout_dirs = find_takeout_dirs(source_root)
-    print(f"  Found {len(takeout_dirs)} Takeout/Google Photos directories")
-
-    media_files, json_index = build_index(takeout_dirs, MEDIA_EXTENSIONS)
-    media_files.sort(key=lambda item: keeper_sort_key(item[0]))
-    total_jsons = sum(len(v) for v in json_index.values())
-    print(f"  Found {len(media_files)} media files")
-    print(f"  Indexed {total_jsons} JSON sidecars across {len(json_index)} albums")
-
-    log.total = len(media_files)
-    log.html.total = len(media_files)
-
-    # Album tracking: album_name -> [dest_path, ...]
-    album_files = defaultdict(list)  # type: dict[str, list[Path]]
-
-    # Phase 2-4: Process each media file
-    print(f"\nPhase 2-4: Processing files{' (dry run)' if dry_run else ''}...")
-    dedup_dest_by_key = {}  # dedup_key -> canonical destination path
-
-    for i, (media_path, album_name) in enumerate(media_files, 1):
-        try:
-            # Find matching JSON
-            json_path = find_json_for_media(media_path, album_name, json_index)
-
-            # Extract date
-            dt, date_source = extract_date(media_path, json_path)
-
-            # Extract rich metadata for report tooltips
-            metadata = extract_metadata(media_path, json_path)
-
-            # Compute destination
-            dest_path = compute_dest_path(output_root, media_path, dt)
-
-            md5 = compute_md5(media_path)
-            dedup_key = make_dedup_key(md5, dt)
-
-            # Check resumability
-            if is_already_copied(media_path, dest_path):
-                log.skipped_resume += 1
-                log.log(f"SKIP_RESUME: {media_path} -> {dest_path}")
-                log.html.add_copied(dest_path, media_path, dt, date_source,
-                                    album_name, json_path is not None, metadata)
-                dedup_dest_by_key.setdefault(dedup_key, dest_path)
-                album_files[album_name].append(dest_path)
-                log.progress(i, log.total)
-                continue
-
-            # Deduplication
-            if dedup_key in dedup_dest_by_key:
-                log.skipped_dupes += 1
-                keeper_dest = dedup_dest_by_key[dedup_key]
-                log.log(f"SKIP_DUPE: {media_path} (md5={md5}) -> {keeper_dest}")
-                log.html.add_duplicate(media_path, md5)
-                album_files[album_name].append(keeper_dest)
-                log.progress(i, log.total)
-                continue
-
-            # Handle needs_review
-            if dt is None:
-                log.needs_review += 1
-                log.log_review(media_path, "No date found from any source")
-                if not dry_run:
-                    actual_dest = copy_with_sidecar(media_path, json_path, dest_path, dry_run)
-                    log.log(f"REVIEW: {media_path} -> {actual_dest}")
-                    log.html.add_copied(actual_dest, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
-                    album_files[album_name].append(actual_dest)
-                    dedup_dest_by_key[dedup_key] = actual_dest
-                else:
-                    log.log(f"REVIEW: {media_path} -> {dest_path}")
-                    log.html.add_copied(dest_path, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
-                    album_files[album_name].append(dest_path)
-                    dedup_dest_by_key[dedup_key] = dest_path
-            else:
-                # Normal copy
-                if not dry_run:
-                    actual_dest = copy_with_sidecar(media_path, json_path, dest_path, dry_run)
-                    log.log(f"COPY: {media_path} -> {actual_dest} (date={dt})")
-                    log.html.add_copied(actual_dest, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
-                    album_files[album_name].append(actual_dest)
-                    dedup_dest_by_key[dedup_key] = actual_dest
-                else:
-                    log.log(f"COPY: {media_path} -> {dest_path} (date={dt})")
-                    log.html.add_copied(dest_path, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
-                    album_files[album_name].append(dest_path)
-                    dedup_dest_by_key[dedup_key] = dest_path
-                log.copied += 1
-
-        except Exception as e:
-            log.errors += 1
-            log.log(f"ERROR: {media_path} -- {type(e).__name__}: {e}")
-            log.html.add_error(media_path, f"{type(e).__name__}: {e}")
-
-        log.progress(i, log.total)
-
-    # Phase 5: Create album symlinks
-    print()  # newline after progress bar
-    create_album_symlinks(output_root, album_files, dry_run, log)
-
-    # Phase 6: Write reports
-    log.write_logs()
+    run(args)
 
 
 if __name__ == "__main__":

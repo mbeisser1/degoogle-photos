@@ -1,8 +1,7 @@
-"""Deduplication via MD5 hashing and date-rounded keys."""
+"""Deduplication via MD5 hashing."""
 
 import hashlib
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -82,11 +81,3 @@ def keeper_for_files(
         fpath: md5_to_keeper.get(file_md5[fpath], fpath)
         for fpath in files
     }
-
-
-def make_dedup_key(md5: str, dt: Optional[datetime]) -> tuple:
-    """Create deduplication key: (md5, date rounded to minute)."""
-    if dt:
-        rounded = dt.replace(second=0, microsecond=0)
-        return (md5, rounded.isoformat())
-    return (md5, None)

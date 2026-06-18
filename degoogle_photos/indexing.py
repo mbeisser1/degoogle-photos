@@ -1,16 +1,69 @@
-"""Index Takeout directories — find media files and JSON sidecars."""
+"""Index Google Photos/ Takeout exports — find media files and JSON sidecars."""
 
 import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 # Google Takeout folders that typically hold the canonical copy of a photo.
 # Lower priority number = preferred keeper when deduplicating.
 _CANONICAL_ARCHIVE_RE = re.compile(r"^Archive$", re.IGNORECASE)
 _CANONICAL_LOCKED_RE = re.compile(r"^Locked Folder$", re.IGNORECASE)
 _CANONICAL_YEAR_ALBUM_RE = re.compile(r"^Photos from \d{4}$", re.IGNORECASE)
+
+
+def looks_like_google_photos_takeout(source_root: Path) -> bool:
+    """
+    True when source_root looks like an extracted Google Photos/ Takeout folder.
+
+    Expects album subfolders (Archive, Locked Folder, Photos from YYYY, or named
+  albums) — not a flat directory of media files.
+    """
+    if not source_root.is_dir():
+        return False
+    subdirs = [p for p in source_root.iterdir() if p.is_dir()]
+    if not subdirs:
+        return False
+    if source_root.name.lower() == "google photos":
+        return True
+    return any(
+        _CANONICAL_ARCHIVE_RE.match(d.name)
+        or _CANONICAL_LOCKED_RE.match(d.name)
+        or _CANONICAL_YEAR_ALBUM_RE.match(d.name)
+        for d in subdirs
+    )
+
+
+def resolve_source_root(path: Path) -> Path:
+    """
+    Resolve --source to Google Photos/ when the user passes a Takeout root folder.
+    """
+    resolved = path.resolve()
+    google_photos = resolved / "Google Photos"
+    if google_photos.is_dir() and resolved.name.lower().startswith("takeout"):
+        print(f"NOTE: Using {google_photos} (pass Google Photos/ directly next time)")
+        return google_photos
+    return resolved
+
+
+def validate_source_root(path: Path) -> Path:
+    """
+    Validate --source and return the resolved Google Photos/ path to scan.
+
+    Exits with a clear message when the path is missing or not a Takeout export.
+    """
+    resolved = resolve_source_root(path)
+    if not resolved.is_dir():
+        print(f"ERROR: --source '{path}' is not a directory.")
+        raise SystemExit(1)
+    if not looks_like_google_photos_takeout(resolved):
+        print(f"ERROR: --source '{path}' does not look like a Google Photos/ Takeout export.")
+        print("  Point --source at the Google Photos/ folder inside your Takeout extract,")
+        print("  e.g. .../Takeout/Google Photos/")
+        print("  Expected album subfolders (Archive, Photos from YYYY, named albums, etc.).")
+        raise SystemExit(1)
+    return resolved
 
 
 def canonical_source_label(media_path: Path) -> str:
@@ -153,116 +206,6 @@ def _format_album_location_line(album: str, filenames: List[str], max_show: int)
     return f"    {album}/ ({count}): {shown}, … and {count - max_show} more"
 
 
-def find_takeout_dirs(source_root: Path) -> List[Path]:
-    """
-    Find all Takeout*/Google Photos/ directories.
-
-    Handles several common ways users might point --source:
-    1. Parent containing Takeout*/ dirs           (intended usage)
-    2. A Takeout dir directly (has Google Photos/)
-    3. The Google Photos dir itself inside a Takeout
-    4. A grandparent containing subdirs that contain Takeout*/ dirs
-    """
-    dirs = []
-
-    # Case 1: source_root contains Takeout*/ children (standard case)
-    for entry in sorted(source_root.iterdir()):
-        if entry.is_dir() and entry.name.startswith("Takeout"):
-            gp_dir = entry / "Google Photos"
-            if gp_dir.is_dir():
-                dirs.append(gp_dir)
-    if dirs:
-        return dirs
-
-    # Case 2: source_root IS a Takeout dir (has Google Photos/ inside)
-    gp_dir = source_root / "Google Photos"
-    if gp_dir.is_dir():
-        print(f"  (Auto-detected: --source points at a Takeout directory)")
-        return [gp_dir]
-
-    # Case 3: source_root IS the Google Photos dir (has album subdirs with media)
-    if source_root.name == "Google Photos":
-        # Verify it looks like a Google Photos dir (has subdirectories)
-        has_subdirs = any(p.is_dir() for p in source_root.iterdir())
-        if has_subdirs:
-            print(f"  (Auto-detected: --source points at a Google Photos directory)")
-            return [source_root]
-
-    # Case 4: source_root is a grandparent (e.g. user pointed at "Pictures/google photos")
-    # Look one level deeper for dirs containing Takeout*/Google Photos/
-    for child in sorted(source_root.iterdir()):
-        if not child.is_dir():
-            continue
-        for grandchild in child.iterdir():
-            if grandchild.is_dir() and grandchild.name.startswith("Takeout"):
-                gp_dir = grandchild / "Google Photos"
-                if gp_dir.is_dir():
-                    dirs.append(gp_dir)
-    if dirs:
-        print(f"  (Auto-detected: found Takeout directories one level deeper)")
-
-    return dirs
-
-
-def build_index(
-    takeout_dirs: List[Path],
-    media_extensions: Set[str],
-) -> Tuple[List[Tuple[Path, str]], dict]:
-    """
-    Walk all Takeout dirs. Return:
-    - media_files: list of (file_path, album_name) for every media file
-    - json_index: dict[album_name_lower][media_title_lower] -> json_path
-
-    The JSON sidecar's "title" field is the authoritative link to the media file.
-    We also index by filename-based stripping as a fallback.
-    """
-    media_files = []
-    # json_index[album_lower][title_lower] = json_path
-    json_index = defaultdict(dict)
-    # Secondary index: json_by_filename_strip[album_lower][stripped_lower] = json_path
-    json_by_strip = defaultdict(dict)
-
-    for gp_dir in takeout_dirs:
-        for album_dir in sorted(gp_dir.iterdir()):
-            if not album_dir.is_dir():
-                continue
-            album_name = album_dir.name
-            album_key = album_name.lower()
-
-            for fpath in album_dir.iterdir():
-                if not fpath.is_file():
-                    continue
-
-                name = fpath.name
-                name_lower = name.lower()
-
-                if name_lower.endswith(".json"):
-                    if name_lower == "metadata.json":
-                        continue  # album metadata, skip
-
-                    # Try to read the title from the JSON
-                    title = _read_json_title(fpath)
-                    if title:
-                        json_index[album_key][title.lower()] = fpath
-
-                    # Also index by stripping known sidecar suffixes
-                    stripped = _strip_sidecar_suffix(name)
-                    if stripped:
-                        json_by_strip[album_key][stripped.lower()] = fpath
-                else:
-                    ext = fpath.suffix.lower()
-                    if ext in media_extensions:
-                        media_files.append((fpath, album_name))
-
-    # Merge json_by_strip into json_index (json_index takes priority since title is authoritative)
-    for album_key, entries in json_by_strip.items():
-        for media_key, json_path in entries.items():
-            if media_key not in json_index[album_key]:
-                json_index[album_key][media_key] = json_path
-
-    return media_files, dict(json_index)
-
-
 def _read_json_title(json_path: Path) -> Optional[str]:
     """Read the 'title' field from a JSON sidecar."""
     try:
@@ -400,8 +343,7 @@ def resolve_sidecars(
 
 def find_all_media_files(source_root: Path, media_extensions: Set[str]) -> List[Path]:
     """
-    Recursively find all media files under source_root.
-    No Takeout structure required — works on any arbitrary directory tree.
+    Recursively find all media files under source_root (album subfolders of Google Photos/).
     """
     files = []
     for fpath in source_root.rglob("*"):
@@ -426,42 +368,3 @@ def find_all_sidecar_files(source_root: Path) -> List[Path]:
             files.append(fpath)
     return files
 
-
-def find_json_for_media(
-    media_path: Path,
-    album_name: str,
-    json_index: dict,
-) -> Optional[Path]:
-    """
-    Find the JSON sidecar for a media file.
-    Strategy:
-    1. Look up by exact media filename in the album's index (title-based or strip-based)
-    2. For truncated JSON names, check if any indexed title starts with a prefix of the media filename
-    """
-    album_key = album_name.lower()
-    album_jsons = json_index.get(album_key)
-    if not album_jsons:
-        return None
-
-    media_name_lower = media_path.name.lower()
-
-    # Direct match
-    if media_name_lower in album_jsons:
-        return album_jsons[media_name_lower]
-
-    # Prefix matching for heavily truncated JSON filenames
-    best_match = None
-    best_len = 0
-    for key, jpath in album_jsons.items():
-        if media_name_lower.startswith(key) and len(key) > best_len:
-            best_match = jpath
-            best_len = len(key)
-        elif key.startswith(media_name_lower) and len(media_name_lower) > best_len:
-            best_match = jpath
-            best_len = len(media_name_lower)
-
-    # Only accept prefix matches of reasonable length to avoid false positives
-    if best_match and best_len >= 10:
-        return best_match
-
-    return None

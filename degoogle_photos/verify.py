@@ -1,4 +1,4 @@
-"""Post-run verification for dedup-scan output."""
+"""Post-run verification for dedup output."""
 
 from dataclasses import dataclass, field
 from pathlib import Path

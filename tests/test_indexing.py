@@ -1,17 +1,17 @@
 """Tests for degoogle_photos.indexing."""
 
-import json
+import pytest
 from pathlib import Path
 
 from degoogle_photos.indexing import (
-    find_takeout_dirs,
-    build_index,
     _strip_sidecar_suffix,
-    find_json_for_media,
     find_all_media_files,
     find_all_sidecar_files,
     find_sidecar_for_media,
     resolve_sidecars,
+    looks_like_google_photos_takeout,
+    resolve_source_root,
+    validate_source_root,
     canonical_source_priority,
     canonical_source_label,
     canonical_album_label,
@@ -24,63 +24,39 @@ from degoogle_photos.indexing import (
 MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".mov"}
 
 
-def test_find_takeout_dirs(fake_takeout):
-    dirs = find_takeout_dirs(fake_takeout)
-    assert len(dirs) == 1
-    assert dirs[0].name == "Google Photos"
+def test_looks_like_google_photos_takeout_by_name(tmp_path):
+    gp = tmp_path / "Google Photos"
+    gp.mkdir()
+    (gp / "Vacation").mkdir()
+    assert looks_like_google_photos_takeout(gp)
 
 
-def test_find_takeout_dirs_ignores_non_takeout(tmp_path):
-    (tmp_path / "NotTakeout" / "Google Photos").mkdir(parents=True)
-    (tmp_path / "Takeout1" / "Google Photos").mkdir(parents=True)
-    dirs = find_takeout_dirs(tmp_path)
-    assert len(dirs) == 1
+def test_looks_like_google_photos_takeout_by_year_album(tmp_path):
+    src = tmp_path / "export"
+    (src / "Photos from 2020").mkdir(parents=True)
+    assert looks_like_google_photos_takeout(src)
 
 
-def test_find_takeout_dirs_pointed_at_takeout_dir(tmp_path):
-    """Case 2: user points --source at the Takeout dir itself."""
+def test_looks_like_google_photos_takeout_rejects_flat_dir(tmp_path):
+    src = tmp_path / "flat"
+    src.mkdir()
+    (src / "photo.jpg").write_bytes(b"x")
+    assert not looks_like_google_photos_takeout(src)
+
+
+def test_resolve_source_root_from_takeout_folder(tmp_path):
     takeout = tmp_path / "Takeout"
-    (takeout / "Google Photos" / "Album1").mkdir(parents=True)
-    dirs = find_takeout_dirs(takeout)
-    assert len(dirs) == 1
-    assert dirs[0].name == "Google Photos"
+    gp = takeout / "Google Photos"
+    gp.mkdir(parents=True)
+    (gp / "Photos from 2020").mkdir()
+    assert resolve_source_root(takeout) == gp.resolve()
 
 
-def test_find_takeout_dirs_pointed_at_google_photos(tmp_path):
-    """Case 3: user points --source at the Google Photos dir."""
-    gp = tmp_path / "Takeout" / "Google Photos"
-    (gp / "Album1").mkdir(parents=True)
-    dirs = find_takeout_dirs(gp)
-    assert len(dirs) == 1
-    assert dirs[0] == gp
-
-
-def test_find_takeout_dirs_grandparent(tmp_path):
-    """Case 4: user points --source one level above the Takeout dirs."""
-    (tmp_path / "export1" / "Takeout" / "Google Photos").mkdir(parents=True)
-    (tmp_path / "export2" / "Takeout" / "Google Photos").mkdir(parents=True)
-    dirs = find_takeout_dirs(tmp_path)
-    assert len(dirs) == 2
-
-
-def test_build_index(fake_takeout):
-    dirs = find_takeout_dirs(fake_takeout)
-    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
-    # Should find photo.jpg and video.mp4
-    assert len(media) == 2
-    names = {p.name for p, _ in media}
-    assert "photo.jpg" in names
-    assert "video.mp4" in names
-    # JSON index should have photo.jpg via title
-    assert "photo.jpg" in json_idx["album1"]
-
-
-def test_build_index_skips_metadata_json(fake_takeout):
-    dirs = find_takeout_dirs(fake_takeout)
-    _, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
-    # metadata.json's title "Album1" should not appear as a media key
-    album_keys = json_idx.get("album1", {})
-    assert "metadata.json" not in album_keys
+def test_validate_source_root_rejects_non_takeout(tmp_path):
+    bad = tmp_path / "random"
+    bad.mkdir()
+    with pytest.raises(SystemExit):
+        validate_source_root(bad)
 
 
 def test_strip_sidecar_suffix():
@@ -91,50 +67,6 @@ def test_strip_sidecar_suffix():
     assert _strip_sidecar_suffix("photo.jpg.sup.json") == "photo.jpg"
     assert _strip_sidecar_suffix("not_a_sidecar.txt") is None
 
-
-def test_find_json_for_media_direct_match(fake_takeout):
-    dirs = find_takeout_dirs(fake_takeout)
-    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
-    photo = [p for p, _ in media if p.name == "photo.jpg"][0]
-    result = find_json_for_media(photo, "Album1", json_idx)
-    assert result is not None
-    assert result.name == "photo.jpg.json"
-
-
-def test_find_json_for_media_no_match(fake_takeout):
-    dirs = find_takeout_dirs(fake_takeout)
-    _, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
-    fake_media = fake_takeout / "Takeout1" / "Google Photos" / "Album1" / "nonexistent.jpg"
-    result = find_json_for_media(fake_media, "Album1", json_idx)
-    assert result is None
-
-
-def test_find_json_for_media_prefix_match(tmp_path):
-    """Test prefix matching for truncated JSON titles."""
-    album_dir = tmp_path / "Takeout1" / "Google Photos" / "Album1"
-    album_dir.mkdir(parents=True)
-
-    # Long media filename
-    long_name = "a" * 20 + "_extra_stuff.jpg"
-    (album_dir / long_name).write_bytes(b"\xff\xd8\xff\xd9")
-
-    # JSON with truncated title (only first 20 chars)
-    truncated_title = "a" * 20
-    sidecar = {"title": truncated_title}
-    (album_dir / (truncated_title + ".json")).write_text(
-        json.dumps(sidecar), encoding="utf-8"
-    )
-
-    dirs = find_takeout_dirs(tmp_path)
-    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
-    media_file = [p for p, _ in media][0]
-    result = find_json_for_media(media_file, "Album1", json_idx)
-    assert result is not None
-
-
-# ---------------------------------------------------------------------------
-# find_all_media_files
-# ---------------------------------------------------------------------------
 
 def test_find_all_media_files_flat(tmp_path):
     (tmp_path / "photo.jpg").write_bytes(b"x")
