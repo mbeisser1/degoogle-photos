@@ -1,5 +1,7 @@
 """File copying with collision resolution and sidecar handling."""
 
+import filecmp
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -32,11 +34,11 @@ def resolve_collision(dest_path: Path) -> Path:
 
 
 def is_already_copied(source: Path, dest: Path) -> bool:
-    """Check if file was already copied (same name + same size = skip for resume)."""
+    """Check if dest already holds a byte-identical copy of source (resume support)."""
     if not dest.exists():
         return False
     try:
-        return source.stat().st_size == dest.stat().st_size
+        return filecmp.cmp(source, dest, shallow=False)
     except OSError:
         return False
 
@@ -46,6 +48,22 @@ def sidecar_dest_path(media_dest: Path) -> Path:
     return media_dest.parent / (media_dest.name + ".json")
 
 
+def ensure_symlink(link_path: Path, target: Path) -> None:
+    """Create or replace a relative symlink to target."""
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    rel_target = os.path.relpath(target, link_path.parent)
+    if link_path.is_symlink():
+        try:
+            if link_path.resolve() == target.resolve():
+                return
+        except OSError:
+            pass
+        link_path.unlink()
+    elif link_path.exists():
+        link_path.unlink()
+    link_path.symlink_to(rel_target)
+
+
 def copy_with_sidecar(
     media_path: Path,
     json_path: Optional[Path],
@@ -53,6 +71,13 @@ def copy_with_sidecar(
     dry_run: bool,
 ) -> Path:
     """Copy media file (and its JSON sidecar) to dest_path. Returns actual dest used."""
+    if not dry_run and is_already_copied(media_path, dest_path):
+        json_dest = sidecar_dest_path(dest_path)
+        if json_path and json_path.exists() and not json_dest.exists():
+            json_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(json_path, json_dest)
+        return dest_path
+
     dest_path = resolve_collision(dest_path)
 
     if not dry_run:

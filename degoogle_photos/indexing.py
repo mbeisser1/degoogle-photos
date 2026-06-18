@@ -185,6 +185,39 @@ def _strip_sidecar_suffix(json_filename: str) -> Optional[str]:
     return None
 
 
+def _sidecar_matches_media(
+    sidecar_filename: str,
+    media_filename: str,
+    json_title: Optional[str] = None,
+) -> int:
+    """
+    Score how well a sidecar filename matches a media file (higher = better).
+    Returns 0 when the sidecar does not belong to this media file.
+
+  Title from the JSON body is authoritative when present; filename-only
+    matching requires an exact media filename after stripping the sidecar suffix.
+    """
+    stripped = _strip_sidecar_suffix(sidecar_filename)
+    if not stripped:
+        return 0
+
+    media_lower = media_filename.lower()
+    stripped_lower = stripped.lower()
+    title_lower = json_title.lower() if json_title else None
+
+    if title_lower == media_lower:
+        return 100_000
+
+    if media_lower == stripped_lower:
+        return 10_000 + len(stripped_lower)
+
+    if title_lower and len(title_lower) >= 10:
+        if media_lower.startswith(title_lower) or title_lower.startswith(media_lower):
+            return 5_000 + len(title_lower)
+
+    return 0
+
+
 def find_sidecar_for_media(media_path: Path) -> Optional[Path]:
     """
     Find a JSON sidecar in the same directory as a media file.
@@ -201,14 +234,21 @@ def find_sidecar_for_media(media_path: Path) -> Optional[Path]:
             return candidate
 
     prefix = media_path.stem[:40]
-    if len(prefix) >= 10:
-        for candidate in sorted(parent.glob(prefix + "*.json")):
-            if candidate.name.lower() == "metadata.json":
-                continue
-            if _strip_sidecar_suffix(candidate.name) is not None:
-                return candidate
+    if len(prefix) < 10:
+        return None
 
-    return None
+    best: Optional[Path] = None
+    best_score = 0
+    for candidate in parent.glob(prefix + "*.json"):
+        if candidate.name.lower() == "metadata.json":
+            continue
+        title = _read_json_title(candidate)
+        score = _sidecar_matches_media(candidate.name, name, title)
+        if score > best_score:
+            best = candidate
+            best_score = score
+
+    return best if best_score >= 5_000 else None
 
 
 def resolve_sidecars(

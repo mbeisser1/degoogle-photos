@@ -1,7 +1,6 @@
 """CLI entry point — orchestrates the full migration pipeline."""
 
 import argparse
-import os
 import time
 import webbrowser
 from collections import defaultdict
@@ -12,7 +11,6 @@ from .indexing import (
     build_index,
     find_json_for_media,
     find_all_media_files,
-    find_sidecar_for_media,
     resolve_sidecars,
     keeper_sort_key,
 )
@@ -30,10 +28,12 @@ from .copy import (
     is_already_copied,
     copy_with_sidecar,
     sidecar_dest_path,
+    ensure_symlink,
 )
 from .albums import create_album_symlinks
 from .logging_util import MigrationLog
 from .report import DedupReport
+from .verify import verify_dedup_output, print_verify_result, LinkEntry
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -115,12 +115,17 @@ def _run_dedup(args):
 
     dupe_file_count = len(skipped_paths)
     unique_count = len(files) - dupe_file_count
-    print(f"  {len(dup_groups)} duplicate groups — {dupe_file_count} files will be skipped, "
-          f"{unique_count} unique files to copy")
+    print(f"  Scanned {len(files)} files")
+    if dupe_file_count:
+        print(
+            f"  {dupe_file_count} skipped — same photo / video already in another folder "
+            f"(e.g. 'Photos from 2021' and a named album)"
+        )
+    print(f"  {unique_count} photos to copy")
 
     # Phase 3: Copy unique files into YYYY/MM/ and mirror source tree as symlinks
     action = "Would copy" if dry_run else "Copying"
-    print(f"\nPhase 3: {action} {unique_count} unique files to '{output_root}' (date-organised)...")
+    print(f"\nPhase 3: {action} {unique_count} photos to '{output_root}' (date-organised)...")
     unique_files = [f for f in files if f not in skipped_paths]
     copied = 0
     errors = 0
@@ -156,6 +161,7 @@ def _run_dedup(args):
     action4 = "Would create" if dry_run else "Creating"
     print(f"\nPhase 4: {action4} folder aliases under '{by_folder_root}'...")
     link_count = 0
+    link_entries: list[LinkEntry] = []
     for src in files:
         keeper = keeper_map[src]
         dest = src_to_dest[keeper]
@@ -164,16 +170,14 @@ def _run_dedup(args):
         link_path = by_folder_root / src_root.name / rel if multi_source else by_folder_root / rel
         try:
             if not dry_run:
-                link_path.parent.mkdir(parents=True, exist_ok=True)
-                if not link_path.exists():
-                    rel_target = os.path.relpath(dest, link_path.parent)
-                    link_path.symlink_to(rel_target)
+                ensure_symlink(link_path, dest)
+            link_entries.append(("photo", src, link_path, dest))
             link_count += 1
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
             report.add_error(src, f"symlink: {msg}")
 
-        sidecar = find_sidecar_for_media(src)
+        sidecar = sidecar_map.get(src)
         keeper_json = src_to_json_dest.get(keeper)
         if sidecar and keeper_json:
             sidecar_rel = sidecar.relative_to(src_root)
@@ -184,10 +188,8 @@ def _run_dedup(args):
             )
             try:
                 if not dry_run:
-                    sidecar_link.parent.mkdir(parents=True, exist_ok=True)
-                    if not sidecar_link.exists():
-                        rel_target = os.path.relpath(keeper_json, sidecar_link.parent)
-                        sidecar_link.symlink_to(rel_target)
+                    ensure_symlink(sidecar_link, keeper_json)
+                link_entries.append(("json", sidecar, sidecar_link, keeper_json))
                 link_count += 1
             except Exception as e:
                 msg = f"{type(e).__name__}: {e}"
@@ -195,8 +197,36 @@ def _run_dedup(args):
 
     print(f"  {link_count} aliases created")
 
+    # Record JSON sidecars for the HTML report
+    for src in files:
+        sidecar = sidecar_map.get(src)
+        if not sidecar:
+            continue
+        keeper = keeper_map[src]
+        keeper_json = src_to_json_dest.get(keeper)
+        if not keeper_json:
+            continue
+        status = "COPIED" if src == keeper else "SYMLINK"
+        report.add_sidecar(str(src), sidecar, status, keeper_json)
+
+    # Phase 5: Verify by-folder/ mirrors the source tree
+    print(f"\nPhase 5: Verifying output structure...")
+    verify_result = verify_dedup_output(
+        link_entries=link_entries,
+        src_to_dest=src_to_dest,
+        src_to_json_dest=src_to_json_dest,
+        output_root=output_root,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        print("  Skipped (dry run)")
+    else:
+        print_verify_result(verify_result)
+        report.verification_errors = verify_result.errors
+
     # Write report
     output_root.mkdir(parents=True, exist_ok=True)
+    report.symlink_count = link_count
     report.write()
 
     elapsed = time.time() - start
@@ -206,13 +236,17 @@ def _run_dedup(args):
     print(f"\n{'='*60}")
     print(f"{prefix}Dedup Summary")
     print(f"{'='*60}")
-    print(f"Files scanned:       {report.scanned}")
-    print(f"Duplicate groups:    {len(dup_groups)}")
-    print(f"Duplicates skipped:  {dupe_file_count}")
-    print(f"Unique files copied: {copied}")
+    print(f"Paths scanned:           {report.scanned}")
+    if dupe_file_count:
+        print(f"Duplicate paths skipped: {dupe_file_count}  (same photo / video in another folder)")
+    print(f"Photos copied:           {copied}")
     print(f"Folder aliases:      {link_count}")
     if errors:
         print(f"Errors:              {errors}")
+    if not dry_run and not verify_result.ok:
+        print(f"Verification:        FAILED ({len(verify_result.errors)} issue(s))")
+    elif not dry_run:
+        print(f"Verification:        passed")
     print(f"Time elapsed:        {elapsed:.1f}s")
     print(f"{'='*60}")
     for src in source_roots:

@@ -186,6 +186,55 @@ def test_find_sidecar_for_media_prefers_supplemental_over_json(tmp_path):
     assert find_sidecar_for_media(media) == supplemental
 
 
+def test_find_sidecar_picks_correct_truncated_match(tmp_path):
+    album = tmp_path / "Photos from 2024"
+    album.mkdir(parents=True)
+    base = "2024-06-27 11-04-11 - Working outting 2024-06-2"
+    media_a = album / f"{base}(1).jpg"
+    media_b = album / f"{base}(2).jpg"
+    media_a.write_bytes(b"a")
+    media_b.write_bytes(b"b")
+    sidecar_a = album / f"{base}(1).jpg.json"
+    sidecar_b = album / f"{base}(2).jpg.json"
+    sidecar_a.write_text("{}", encoding="utf-8")
+    sidecar_b.write_text("{}", encoding="utf-8")
+
+    assert find_sidecar_for_media(media_a) == sidecar_a
+    assert find_sidecar_for_media(media_b) == sidecar_b
+
+
+def test_find_sidecar_does_not_cross_match_similar_names(tmp_path):
+    album = tmp_path / "Photos from 2021"
+    album.mkdir(parents=True)
+    original = album / "IMG_3546_Original.JPG"
+    copy = album / "IMG_3546_Original Copy.JPG"
+    original.write_bytes(b"a")
+    copy.write_bytes(b"b")
+    original_sidecar = album / "IMG_3546_Original.JPG.supplemental-metadata.json"
+    copy_sidecar = album / "IMG_3546_Original Copy.JPG.supplemental-metada.json"
+    original_sidecar.write_text('{"title":"IMG_3546_Original.JPG"}', encoding="utf-8")
+    copy_sidecar.write_text('{"title":"IMG_3546_Original Copy.JPG"}', encoding="utf-8")
+
+    assert find_sidecar_for_media(original) == original_sidecar
+    assert find_sidecar_for_media(copy) == copy_sidecar
+
+
+def test_find_sidecar_live_photo_heic_vs_mp4(tmp_path):
+    album = tmp_path / "Photos from 2025"
+    album.mkdir(parents=True)
+    heic = album / "FullSizeRender.heic"
+    mp4 = album / "FullSizeRender.MP4"
+    heic.write_bytes(b"h")
+    mp4.write_bytes(b"v")
+    heic_sidecar = album / "FullSizeRender.heic.supplemental-metadata.json"
+    mp4_sidecar = album / "FullSizeRender.MP4.supplemental-metadata.json"
+    heic_sidecar.write_text('{"title":"FullSizeRender.heic"}', encoding="utf-8")
+    mp4_sidecar.write_text('{"title":"FullSizeRender.MP4"}', encoding="utf-8")
+
+    assert find_sidecar_for_media(heic) == heic_sidecar
+    assert find_sidecar_for_media(mp4) == mp4_sidecar
+
+
 def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
     from degoogle_photos.dedup import hash_files
 

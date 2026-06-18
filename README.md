@@ -25,6 +25,22 @@ Point `--source` at the folder containing your extracted `Takeout*/Google Photos
 
 Runs are resumable — already-copied files are skipped on restart.
 
+## Archiving (Linux)
+
+Store a copy of the output (or source tree) as split RAR5 volumes with no compression and BLAKE2 checksums. Requires [RAR for Linux](https://www.rarlab.com/download.htm).
+
+```bash
+rar a -ma5 -m0 -v2g -htb -r /path/to/archive.rar /path/to/output/
+```
+
+| Switch | Meaning |
+|--------|---------|
+| `-ma5` | RAR 5.0 archive format |
+| `-m0` | Store only (no compression) |
+| `-v2g` | Split into 2 GB volumes (`archive.part001.rar`, …) |
+| `-htb` | BLAKE2 file checksums (requires RAR5) |
+| `-r` | Recurse subdirectories |
+
 ## Modes
 
 | Mode | Flag | Output |
@@ -41,6 +57,7 @@ Runs are resumable — already-copied files are skipped on restart.
 - **Keeper selection:** `Archive` → `Locked Folder` → `Photos from YYYY` → other folders (e.g. named albums). Shortest path breaks ties.
 - **Symlinks:** Every source path gets a symlink in `by-folder/`, including duplicates and sidecars. Duplicates point at the keeper's file in `YYYY/MM/`.
 - **Sidecars:** JSON sidecars (including `.supplemental-metadata.json`) are used for dates, copied as `filename.json` next to the keeper, and symlinked in `by-folder/` under their original names. Full JSON is preserved for a future metadata pass — nothing is embedded into the media files.
+- **Verification:** After writing files, checks that `by-folder/` has one symlink per source media path and JSON sidecar, that each symlink resolves correctly, and that no unexpected symlinks exist. Exits with an error if the mirror does not match.
 
 ## Options
 

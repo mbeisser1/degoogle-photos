@@ -61,6 +61,14 @@ def test_is_already_copied_different_size(tmp_path):
     assert is_already_copied(src, dst) is False
 
 
+def test_is_already_copied_same_size_different_content(tmp_path):
+    src = tmp_path / "source.jpg"
+    dst = tmp_path / "dest.jpg"
+    src.write_bytes(b"content-A")
+    dst.write_bytes(b"content-B")
+    assert is_already_copied(src, dst) is False
+
+
 def test_is_already_copied_no_dest(tmp_path):
     src = tmp_path / "source.jpg"
     src.write_bytes(b"hello")
@@ -93,6 +101,25 @@ def test_copy_with_sidecar_dry_run(tmp_path):
     actual = copy_with_sidecar(media, None, dest, dry_run=True)
     # Dry run should not create any files
     assert not actual.exists()
+
+
+def test_copy_with_sidecar_resumes_existing_copy(tmp_path):
+    src = tmp_path / "source"
+    src.mkdir()
+    media = src / "photo.jpg"
+    media.write_bytes(b"jpeg data")
+    sidecar = src / "photo.jpg.json"
+    sidecar.write_text('{"title":"photo.jpg"}', encoding="utf-8")
+
+    dest = tmp_path / "output" / "2020" / "05" / "photo.jpg"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"jpeg data")
+
+    actual = copy_with_sidecar(media, sidecar, dest, dry_run=False)
+    assert actual == dest
+    json_copy = sidecar_dest_path(dest)
+    assert json_copy.exists()
+    assert json_copy.read_text(encoding="utf-8") == sidecar.read_text(encoding="utf-8")
 
 
 def test_sidecar_dest_path():

@@ -300,6 +300,9 @@ class DedupReport:
         self.scanned = 0
         self.total = 0
         self.copied = 0
+        self.symlink_count = 0
+        self.sidecars_by_media: dict = {}  # media path str -> sidecar entry dict
+        self.verification_errors: list = []
         self.errors: list = []   # [{"path": str, "error": str}]
 
     def add_group(self, md5: str, files):
@@ -319,6 +322,20 @@ class DedupReport:
             })
         self.groups.append({"md5": md5, "files": group_files})
 
+    def add_sidecar(self, media_path: str, sidecar_path: Path, status: str, dest_path: Path):
+        """Record a JSON sidecar copied or symlinked for a media file."""
+        try:
+            size = sidecar_path.stat().st_size
+        except OSError:
+            size = 0
+        self.sidecars_by_media[media_path] = {
+            "path": str(sidecar_path),
+            "name": sidecar_path.name,
+            "size": size,
+            "status": status,  # COPIED or SYMLINK
+            "dest": str(dest_path),
+        }
+
     def add_error(self, path, error: str):
         self.errors.append({"path": str(path), "error": error})
 
@@ -337,6 +354,18 @@ class DedupReport:
         wasted_bytes = sum(
             f["size"] for g in self.groups for f in g["files"] if not f["keeper"]
         )
+        singleton_count = self.copied - len(self.groups)
+        sidecars_copied = sum(
+            1 for s in self.sidecars_by_media.values() if s["status"] == "COPIED"
+        )
+        sidecars_symlink = sum(
+            1 for s in self.sidecars_by_media.values() if s["status"] == "SYMLINK"
+        )
+        grouped_media = {f["path"] for g in self.groups for f in g["files"]}
+        orphan_sidecars = [
+            s for path, s in self.sidecars_by_media.items()
+            if path not in grouped_media
+        ]
 
         prefix = "[DRY RUN] " if self.dry_run else ""
         html = []
@@ -351,17 +380,26 @@ class DedupReport:
         )
         html.append(f'<header><h1>{prefix}Dedup Report</h1>'
                     f'<p class="updated" style="color:#8b949e;font-size:0.9em;margin-top:4px">'
-                    f'Source is read-only. One file per duplicate group was copied to the output folder.</p>')
+                    f'Every source path gets a <code>by-folder/</code> symlink (media and JSON sidecars). '
+                    f'One copy per photo is written under <code>YYYY/MM/</code>; '
+                    f'duplicate paths are symlink-only.</p>')
         html.append(f'<p class="updated">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
                     f' &mdash; {self.scanned}/{self.total} files scanned</p></header>')
 
         # Summary stats
         html.append('<section class="summary"><h2>Summary</h2><div class="stat-grid">')
-        html.append(f'<div class="stat"><span class="num">{self.scanned}</span><span class="label">Files scanned</span></div>')
-        html.append(f'<div class="stat"><span class="num">{self.copied}</span><span class="label">Unique files copied</span></div>')
-        html.append(f'<div class="stat"><span class="num">{len(self.groups)}</span><span class="label">Duplicate groups</span></div>')
-        html.append(f'<div class="stat"><span class="num">{dupe_file_count}</span><span class="label">Duplicates skipped</span></div>')
-        html.append(f'<div class="stat"><span class="num">{_fmt_bytes(wasted_bytes)}</span><span class="label">Space saved</span></div>')
+        html.append(f'<div class="stat"><span class="num">{self.scanned}</span><span class="label">Paths scanned</span></div>')
+        html.append(f'<div class="stat"><span class="num">{self.copied}</span><span class="label">Photos copied</span></div>')
+        html.append(f'<div class="stat"><span class="num">{self.symlink_count}</span><span class="label">by-folder symlinks</span></div>')
+        if dupe_file_count:
+            html.append(f'<div class="stat"><span class="num">{dupe_file_count}</span><span class="label">Symlink-only paths</span></div>')
+        if singleton_count > 0:
+            html.append(f'<div class="stat"><span class="num">{singleton_count}</span><span class="label">Photos with no duplicates</span></div>')
+        if sidecars_copied:
+            html.append(f'<div class="stat"><span class="num">{sidecars_copied}</span><span class="label">JSON sidecars copied</span></div>')
+        if sidecars_symlink:
+            html.append(f'<div class="stat"><span class="num">{sidecars_symlink}</span><span class="label">JSON sidecars symlinked</span></div>')
+        html.append(f'<div class="stat"><span class="num">{_fmt_bytes(wasted_bytes)}</span><span class="label">Disk space saved</span></div>')
         html.append('</div>')
 
         if not self.groups:
@@ -370,7 +408,12 @@ class DedupReport:
 
         # Duplicate groups
         if self.groups:
-            html.append('<section><h2>Duplicate Groups</h2>')
+            html.append(
+                '<section><h2>Same photo / video in multiple folders</h2>'
+                '<p class="updated">Listed below: photos that appeared in more than one path. '
+                'The keeper was copied to <code>YYYY/MM/</code>; other paths are '
+                '<code>by-folder/</code> symlinks only. JSON sidecars are listed under their photo.</p>'
+            )
             for i, g in enumerate(self.groups, 1):
                 group_wasted = sum(f["size"] for f in g["files"] if not f["keeper"])
                 html.append(
@@ -380,25 +423,40 @@ class DedupReport:
                     f'<code>{g["md5"]}</code>'
                     f'</summary>'
                 )
-                html.append('<table><tr><th>Status</th><th>Path</th><th>Size</th><th></th></tr>')
+                html.append('<table><tr><th>Status</th><th>Kind</th><th>Path</th><th>Size</th><th></th></tr>')
                 for f in g["files"]:
-                    status_class = "keeper" if f["keeper"] else "dupe"
-                    status_label = "COPIED" if f["keeper"] else "SKIPPED"
-                    status_style = 'color:#3fb950' if f["keeper"] else 'color:#8b949e'
-                    copy_btn = (
-                        f'<button class="copy-btn" onclick="copyText(this, \'{_html_escape(f["path"])}\')"'
-                        f' title="Copy path">&#x1f4cb; Path</button>'
-                    )
-                    html.append(
-                        f'<tr class="{status_class}">'
-                        f'<td style="{status_style};font-weight:600">{status_label}</td>'
-                        f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(f["path"])}</td>'
-                        f'<td style="white-space:nowrap">{_fmt_bytes(f["size"])}</td>'
-                        f'<td>{copy_btn}</td>'
-                        f'</tr>'
-                    )
+                    html.append(self._render_dedup_row(
+                        f["keeper"], f["path"], f["size"], "photo", f["name"],
+                    ))
+                    sidecar = self.sidecars_by_media.get(f["path"])
+                    if sidecar:
+                        html.append(self._render_dedup_row(
+                            sidecar["status"] == "COPIED",
+                            sidecar["path"],
+                            sidecar["size"],
+                            "json",
+                            sidecar["name"],
+                        ))
                 html.append('</table></details>')
             html.append('</section>')
+
+        if orphan_sidecars:
+            html.append(
+                '<section><h2>JSON sidecars (photos with no duplicates)</h2>'
+                '<p class="updated">Sidecars for photos that only appeared once in the source tree.</p>'
+            )
+            html.append('<table><tr><th>Status</th><th>Kind</th><th>Path</th><th>Size</th><th></th></tr>')
+            for media_path, sidecar in sorted(self.sidecars_by_media.items()):
+                if media_path in grouped_media:
+                    continue
+                html.append(self._render_dedup_row(
+                    sidecar["status"] == "COPIED",
+                    sidecar["path"],
+                    sidecar["size"],
+                    "json",
+                    sidecar["name"],
+                ))
+            html.append('</table></section>')
 
         # Errors
         if self.errors:
@@ -408,9 +466,46 @@ class DedupReport:
                 html.append(f'<tr><td>{_html_escape(e["path"])}</td><td>{_html_escape(e["error"])}</td></tr>')
             html.append('</table></section>')
 
+        if self.verification_errors:
+            html.append('<section class="errors"><h2>Verification failed</h2>')
+            html.append('<p class="updated">by-folder/ did not fully match the source tree.</p>')
+            html.append('<table><tr><th>Issue</th></tr>')
+            for err in self.verification_errors[:100]:
+                html.append(f'<tr><td>{_html_escape(err)}</td></tr>')
+            if len(self.verification_errors) > 100:
+                html.append(
+                    f'<tr><td>... and {len(self.verification_errors) - 100} more</td></tr>'
+                )
+            html.append('</table></section>')
+
         html.append(_FOOTER)
         html.append('</body></html>')
         (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+
+    def _render_dedup_row(
+        self, is_copied: bool, path: str, size: int, kind: str, name: str,
+    ) -> str:
+        status_class = "keeper" if is_copied else "dupe"
+        if is_copied:
+            status_label = "COPIED"
+            status_style = "color:#3fb950"
+        else:
+            status_label = "SYMLINK"
+            status_style = "color:#d2a8ff"
+        kind_style = "color:#8b949e" if kind == "photo" else "color:#3fb950"
+        copy_btn = (
+            f'<button class="copy-btn" onclick="copyText(this, \'{_html_escape(path)}\')"'
+            f' title="Copy path">&#x1f4cb; Path</button>'
+        )
+        return (
+            f'<tr class="{status_class}">'
+            f'<td style="{status_style};font-weight:600">{status_label}</td>'
+            f'<td style="{kind_style};font-weight:600">{kind}</td>'
+            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(path)}</td>'
+            f'<td style="white-space:nowrap">{_fmt_bytes(size)}</td>'
+            f'<td>{copy_btn}</td>'
+            f'</tr>'
+        )
 
 
 def _fmt_bytes(n: int) -> str:

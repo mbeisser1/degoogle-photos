@@ -242,6 +242,29 @@ def test_dedup_prefers_photos_from_year_as_keeper(tmp_path):
     assert len([p for p in copied if p.name == "IMG.jpg"]) == 1
 
 
+def test_dedup_run_passes_verification(source, output):
+    from degoogle_photos.verify import verify_dedup_output
+
+    _run_dedup(make_args(source, output))
+
+    link_entries = []
+    by_folder = output / "by-folder"
+    for link in by_folder.rglob("*"):
+        if not link.is_symlink():
+            continue
+        target = link.resolve()
+        kind = "json" if link.suffix.lower() == ".json" or ".json" in link.name else "photo"
+        link_entries.append((kind, link, link, target))
+
+    result = verify_dedup_output(
+        link_entries=link_entries,
+        src_to_dest={},
+        src_to_json_dest={},
+        output_root=output,
+    )
+    assert result.ok, result.errors
+
+
 # ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------
