@@ -3,6 +3,7 @@
 import pytest
 from pathlib import Path
 
+from degoogle_photos.constants import MEDIA_EXTENSIONS
 from degoogle_photos.indexing import (
     _strip_sidecar_suffix,
     find_all_media_files,
@@ -19,9 +20,6 @@ from degoogle_photos.indexing import (
     format_outside_expected_locations,
     keeper_sort_key,
 )
-
-
-MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".mov"}
 
 
 def test_looks_like_google_photos_takeout_by_name(tmp_path):

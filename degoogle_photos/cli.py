@@ -5,6 +5,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+from .constants import MEDIA_EXTENSIONS
 from .indexing import (
     find_all_media_files,
     find_all_sidecar_files,
@@ -28,15 +29,6 @@ from .copy import (
 from .report import DedupReport
 from .verify import verify_dedup_output, print_verify_result, LinkEntry
 from .archive import create_rar_archive
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-MEDIA_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tiff", ".tif",
-    ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg",
-}
 
 
 def _format_duration(seconds: float) -> str:

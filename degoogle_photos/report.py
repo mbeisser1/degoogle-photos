@@ -4,10 +4,8 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from .constants import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from .indexing import canonical_source_label, canonical_album_label, format_outside_expected_locations
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tiff", ".tif"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg"}
 
 
 def _media_type_label(path: Path) -> str:
