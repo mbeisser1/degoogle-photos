@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from .indexing import keeper_sort_key
+
 
 def compute_md5(file_path: Path) -> str:
     """Compute MD5 hash of a file."""
@@ -40,8 +42,9 @@ def group_duplicates_from_hashes(
     Group files with identical MD5 hashes.
 
     Returns a list of (md5, [path, ...]) tuples where each list has 2+ files.
-    Within each group the files are sorted shortest-path-first; the first entry
-    is the suggested keeper and the rest are the candidates for deletion.
+    Within each group files are sorted by canonical Takeout folder preference
+    (Archive > Locked Folder > Photos from YYYY > other), then shortest path;
+    the first entry is the keeper.
     """
     md5_groups: Dict[str, List[Path]] = defaultdict(list)
     for fpath, md5 in file_md5.items():
@@ -50,7 +53,7 @@ def group_duplicates_from_hashes(
     result = []
     for md5, group in md5_groups.items():
         if len(group) > 1:
-            group.sort(key=lambda p: (len(str(p)), str(p)))
+            group.sort(key=keeper_sort_key)
             result.append((md5, group))
 
     return result

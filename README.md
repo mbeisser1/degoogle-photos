@@ -136,7 +136,7 @@ output/
       2018/IMG_002.jpg      →  ../../2018/03/IMG_002.jpg
 ```
 
-Within each duplicate group the file with the **shortest path** is kept; all others are skipped. Duplicates are detected across all source folders.
+Within each duplicate group the copy from a **canonical Takeout folder** is kept when possible (`Archive`, `Locked Folder`, `Photos from YYYY`); otherwise the shortest path wins. Duplicates are detected across all source folders. Named albums and other folders are symlinked to that canonical copy.
 
 **Moving the output to another drive:** the `by-folder/` symlinks use relative paths, so they only work if the entire output folder travels as a unit. Copy it with `ditto` (macOS-native, recommended) or `rsync -a` — both preserve symlinks. Never copy `by-folder/` and the `YYYY/MM/` folders separately or the symlinks will break.
 

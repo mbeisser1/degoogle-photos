@@ -1,9 +1,38 @@
 """Index Takeout directories — find media files and JSON sidecars."""
 
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+# Google Takeout folders that typically hold the canonical copy of a photo.
+# Lower priority number = preferred keeper when deduplicating.
+_CANONICAL_ARCHIVE_RE = re.compile(r"^Archive$", re.IGNORECASE)
+_CANONICAL_LOCKED_RE = re.compile(r"^Locked Folder$", re.IGNORECASE)
+_CANONICAL_YEAR_ALBUM_RE = re.compile(r"^Photos from \d{4}$", re.IGNORECASE)
+
+
+def canonical_source_priority(media_path: Path) -> int:
+    """
+    Preference order for which duplicate copy to keep.
+
+    Google Takeout usually places the authoritative copy under Archive,
+    Locked Folder, or Photos from YYYY; named albums then reference it.
+    """
+    folder = media_path.parent.name
+    if _CANONICAL_ARCHIVE_RE.match(folder):
+        return 0
+    if _CANONICAL_LOCKED_RE.match(folder):
+        return 1
+    if _CANONICAL_YEAR_ALBUM_RE.match(folder):
+        return 2
+    return 3
+
+
+def keeper_sort_key(media_path: Path) -> tuple:
+    """Sort key for duplicate keeper selection (lower = preferred)."""
+    return (canonical_source_priority(media_path), len(str(media_path)), str(media_path))
 
 
 def find_takeout_dirs(source_root: Path) -> List[Path]:

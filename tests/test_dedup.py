@@ -94,7 +94,7 @@ def test_group_duplicates_multiple_groups(tmp_path):
 
 
 def test_group_duplicates_keeper_is_shortest_path(tmp_path):
-    """The file with the shortest absolute path string should be first (the keeper)."""
+    """Among non-canonical folders, the shortest path is the keeper."""
     deep = tmp_path / "sub" / "sub2" / "copy.jpg"
     shallow = tmp_path / "orig.jpg"
     deep.parent.mkdir(parents=True)
@@ -151,3 +151,42 @@ def test_keeper_for_files_unique_files_map_to_self(tmp_path):
 
     assert keeper_map[f1] == f1
     assert keeper_map[f2] == f2
+
+
+def test_group_duplicates_prefers_photos_from_year_over_named_album(tmp_path):
+    content = b"same"
+    album = tmp_path / "Vehicle - 2021-05 Challenger" / "IMG.jpg"
+    year = tmp_path / "Photos from 2021" / "IMG.jpg"
+    album.parent.mkdir()
+    year.parent.mkdir()
+    album.write_bytes(content)
+    year.write_bytes(content)
+
+    groups = group_duplicates([album, year])
+    assert groups[0][1][0] == year
+
+
+def test_group_duplicates_prefers_archive_over_photos_from(tmp_path):
+    content = b"same"
+    archive = tmp_path / "Archive" / "IMG.jpg"
+    year = tmp_path / "Photos from 2020" / "IMG.jpg"
+    archive.parent.mkdir()
+    year.parent.mkdir()
+    archive.write_bytes(content)
+    year.write_bytes(content)
+
+    groups = group_duplicates([year, archive])
+    assert groups[0][1][0] == archive
+
+
+def test_group_duplicates_prefers_locked_folder_over_named_album(tmp_path):
+    content = b"same"
+    locked = tmp_path / "Locked Folder" / "secret.jpg"
+    album = tmp_path / "Trip" / "secret.jpg"
+    locked.parent.mkdir()
+    album.parent.mkdir()
+    locked.write_bytes(content)
+    album.write_bytes(content)
+
+    groups = group_duplicates([album, locked])
+    assert groups[0][1][0] == locked

@@ -197,10 +197,10 @@ def test_dedup_sidecar_symlinked_in_by_folder(tmp_path):
 def test_dedup_duplicate_sidecar_symlinks_point_to_keeper_json(tmp_path):
     src = tmp_path / "source"
     src.mkdir()
-    (src / "folderA").mkdir()
+    (src / "Photos from 2020").mkdir()
     (src / "folderB").mkdir()
     content = b"duplicate-content"
-    (src / "folderA" / "IMG_20200601_090000.jpg").write_bytes(content)
+    (src / "Photos from 2020" / "IMG_20200601_090000.jpg").write_bytes(content)
     (src / "folderB" / "IMG_20200601_090000.jpg").write_bytes(content)
     (src / "folderB" / "IMG_20200601_090000.jpg.supplemental-metadata.json").write_text(
         json.dumps({
@@ -218,6 +218,28 @@ def test_dedup_duplicate_sidecar_symlinks_point_to_keeper_json(tmp_path):
     sidecar_link = out / "by-folder" / "folderB" / "IMG_20200601_090000.jpg.supplemental-metadata.json"
     assert sidecar_link.is_symlink()
     assert sidecar_link.resolve() == keeper_json.resolve()
+
+
+def test_dedup_prefers_photos_from_year_as_keeper(tmp_path):
+    src = tmp_path / "source"
+    (src / "Vehicle - 2021-05 Challenger").mkdir(parents=True)
+    (src / "Photos from 2021").mkdir(parents=True)
+    content = b"duplicate-content"
+    (src / "Vehicle - 2021-05 Challenger" / "IMG.jpg").write_bytes(content)
+    (src / "Photos from 2021" / "IMG.jpg").write_bytes(content)
+    out = tmp_path / "output"
+
+    _run_dedup(make_args(src, out))
+
+    year_link = out / "by-folder" / "Photos from 2021" / "IMG.jpg"
+    album_link = out / "by-folder" / "Vehicle - 2021-05 Challenger" / "IMG.jpg"
+    canonical = year_link.resolve()
+    assert year_link.is_symlink()
+    assert album_link.is_symlink()
+    assert album_link.resolve() == canonical
+    assert canonical.exists()
+    copied = media_files_in_output(out)
+    assert len([p for p in copied if p.name == "IMG.jpg"]) == 1
 
 
 # ---------------------------------------------------------------------------

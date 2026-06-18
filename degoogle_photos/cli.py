@@ -14,6 +14,7 @@ from .indexing import (
     find_all_media_files,
     find_sidecar_for_media,
     resolve_sidecars,
+    keeper_sort_key,
 )
 from .dates import extract_date
 from .metadata import extract_metadata
@@ -236,7 +237,8 @@ def main():
     # Dedup mode
     parser.add_argument("--dedup-scan", action="store_true",
                         help="Copy deduplicated media files from --source to --output. "
-                             "One file is kept per duplicate group (shortest path wins). "
+                             "One file is kept per duplicate group (canonical Takeout "
+                             "folders win: Archive, Locked Folder, Photos from YYYY). "
                              "The source folder is never modified.")
 
     args = parser.parse_args()
@@ -259,6 +261,7 @@ def main():
     print(f"  Found {len(takeout_dirs)} Takeout/Google Photos directories")
 
     media_files, json_index = build_index(takeout_dirs, MEDIA_EXTENSIONS)
+    media_files.sort(key=lambda item: keeper_sort_key(item[0]))
     total_jsons = sum(len(v) for v in json_index.values())
     print(f"  Found {len(media_files)} media files")
     print(f"  Indexed {total_jsons} JSON sidecars across {len(json_index)} albums")

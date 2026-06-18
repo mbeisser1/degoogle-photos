@@ -11,6 +11,8 @@ from degoogle_photos.indexing import (
     find_all_media_files,
     find_sidecar_for_media,
     resolve_sidecars,
+    canonical_source_priority,
+    keeper_sort_key,
 )
 
 
@@ -202,3 +204,16 @@ def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
 
     assert resolved[dupe] == sidecar
     assert resolved[keeper] == sidecar
+
+
+def test_canonical_source_priority_order(tmp_path):
+    archive = tmp_path / "Archive" / "photo.jpg"
+    locked = tmp_path / "Locked Folder" / "photo.jpg"
+    year = tmp_path / "Photos from 2021" / "photo.jpg"
+    named = tmp_path / "My Vacation" / "photo.jpg"
+    for p in (archive, locked, year, named):
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    assert canonical_source_priority(archive) < canonical_source_priority(locked)
+    assert canonical_source_priority(locked) < canonical_source_priority(year)
+    assert canonical_source_priority(year) < canonical_source_priority(named)
