@@ -39,6 +39,15 @@ MEDIA_EXTENSIONS = {
 }
 
 
+def _format_duration(seconds: float) -> str:
+    """Format elapsed seconds as Xm Ys (or Ys when under one minute)."""
+    total = int(round(seconds))
+    minutes, secs = divmod(total, 60)
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def run(args):
     """
     Scan --source, copy one keeper per unique MD5 to --output (date-organised),
@@ -95,7 +104,10 @@ def run(args):
     print()  # newline after progress bar
     if files:
         avg_rate = len(files) / hash_elapsed if hash_elapsed > 0 else 0
-        print(f"  Checksums computed in {hash_elapsed:.1f}s ({avg_rate:.0f} files/sec avg)")
+        print(
+            f"  Checksums computed in {_format_duration(hash_elapsed)} "
+            f"({avg_rate:.0f} files/sec avg)"
+        )
 
     # Build the set of files that are duplicates (all but the keeper per group)
     skipped_paths = set()
@@ -233,11 +245,14 @@ def run(args):
     report.write()
 
     archive_path = None
+    archive_elapsed = None
     if not dry_run:
         print(f"\nPhase 6: Archiving '{output_root.resolve()}'...")
+        archive_start = time.time()
         try:
             archive_path = create_rar_archive(output_root)
-            print(f"  Created {archive_path}")
+            archive_elapsed = time.time() - archive_start
+            print(f"  Created {archive_path} in {_format_duration(archive_elapsed)}")
         except RuntimeError as e:
             print(f"ERROR: {e}")
             raise SystemExit(1)
@@ -250,7 +265,9 @@ def run(args):
     print(f"{prefix}Summary")
     print(f"{'='*60}")
     print(f"Paths scanned:           {report.scanned}")
-    print(f"Checksum time:           {hash_elapsed:.1f}s")
+    print(f"Checksum time:           {_format_duration(hash_elapsed)}")
+    if archive_elapsed is not None:
+        print(f"Archive time:            {_format_duration(archive_elapsed)}")
     if dupe_file_count:
         print(f"Duplicate paths skipped: {dupe_file_count}  (same photo / video in another folder)")
     print(f"Photos copied:           {copied}")
