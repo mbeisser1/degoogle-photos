@@ -1,7 +1,11 @@
 """Tests for degoogle_photos.copy."""
 
+import json
 from datetime import datetime
 from pathlib import Path
+
+import piexif
+from PIL import Image
 
 from degoogle_photos.copy import (
     compute_dest_path,
@@ -120,6 +124,30 @@ def test_copy_with_sidecar_resumes_existing_copy(tmp_path):
     json_copy = sidecar_dest_path(dest)
     assert json_copy.exists()
     assert json_copy.read_text(encoding="utf-8") == sidecar.read_text(encoding="utf-8")
+
+
+def test_copy_with_sidecar_embeds_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("degoogle_photos.metadata._embed_with_exiftool", lambda *_: False)
+
+    src = tmp_path / "source"
+    src.mkdir()
+    out = tmp_path / "output" / "2021" / "05"
+
+    media = src / "photo.jpg"
+    Image.new("RGB", (8, 8), color="blue").save(media, "JPEG")
+    sidecar = src / "photo.jpg.json"
+    sidecar.write_text(json.dumps({
+        "title": "photo.jpg",
+        "photoTakenTime": {"timestamp": "1620648000"},
+        "description": "from takeout",
+    }), encoding="utf-8")
+
+    dest = out / "photo.jpg"
+    copy_with_sidecar(media, sidecar, dest, dry_run=False)
+
+    exif = piexif.load(str(dest))
+    assert exif["Exif"][piexif.ExifIFD.DateTimeOriginal] == b"2021:05:10 12:00:00"
+    assert exif["0th"][piexif.ImageIFD.ImageDescription] == b"from takeout"
 
 
 def test_sidecar_dest_path():

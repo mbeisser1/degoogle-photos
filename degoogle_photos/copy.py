@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .metadata import embed_sidecar_metadata
+
 
 def compute_dest_path(output_root: Path, media_path: Path, dt: Optional[datetime]) -> Path:
     """Compute the destination path: output_root/YYYY/MM/filename."""
@@ -76,6 +78,8 @@ def copy_with_sidecar(
         if json_path and json_path.exists() and not json_dest.exists():
             json_dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(json_path, json_dest)
+        if json_path and json_path.exists():
+            embed_sidecar_metadata(dest_path, json_path)
         return dest_path
 
     dest_path = resolve_collision(dest_path)
@@ -87,5 +91,6 @@ def copy_with_sidecar(
         # Copy JSON sidecar alongside, renamed to match the dest filename
         if json_path and json_path.exists():
             shutil.copy2(json_path, sidecar_dest_path(dest_path))
+            embed_sidecar_metadata(dest_path, json_path)
 
     return dest_path
