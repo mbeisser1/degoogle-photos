@@ -12,3 +12,6 @@ settings.local.json
 dist/*
 *.zip
 DeGoogled Photos
+.pytest_cache/
+pytest-cache-files-*/
+.venv/

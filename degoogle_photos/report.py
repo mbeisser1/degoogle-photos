@@ -1,6 +1,5 @@
 """HTML report generation for dedup scan results."""
 
-import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -100,7 +99,7 @@ class DedupReport:
         self.output_dir = output_dir
         self.dry_run = dry_run
         self.report_dir = output_dir / "report"
-        self.groups: list = []   # [{"md5": str, "files": [{"path", "name", "size", "keeper"}]}]
+        self.groups: list = []   # [{"md5": str, "files": [{"path", "size", "keeper"}]}]
         self.scanned = 0
         self.total = 0
         self.copied = 0
@@ -142,9 +141,7 @@ class DedupReport:
                 size = 0
             group_files.append({
                 "path": str(fpath),
-                "name": fpath.name,
                 "size": size,
-                "is_image": fpath.suffix.lower() in IMAGE_EXTENSIONS,
                 "keeper": i == 0,
             })
         self.groups.append({"md5": md5, "files": group_files})
@@ -269,7 +266,7 @@ class DedupReport:
                 html.append('<table><tr><th>Status</th><th>Kind</th><th>Path</th><th>Size</th><th></th></tr>')
                 for f in g["files"]:
                     html.append(self._render_dedup_row(
-                        f["keeper"], f["path"], f["size"], "photo", f["name"],
+                        f["keeper"], f["path"], f["size"], "photo",
                     ))
                     sidecar = self.sidecars_by_media.get(f["path"])
                     if sidecar:
@@ -278,7 +275,6 @@ class DedupReport:
                             sidecar["path"],
                             sidecar["size"],
                             "json",
-                            sidecar["name"],
                         ))
                 html.append('</table></details>')
             html.append('</section>')
@@ -297,7 +293,6 @@ class DedupReport:
                     sidecar["path"],
                     sidecar["size"],
                     "json",
-                    sidecar["name"],
                 ))
             html.append('</table></section>')
 
@@ -523,7 +518,7 @@ class DedupReport:
         return html
 
     def _render_dedup_row(
-        self, is_copied: bool, path: str, size: int, kind: str, name: str,
+        self, is_copied: bool, path: str, size: int, kind: str,
     ) -> str:
         status_class = "keeper" if is_copied else "dupe"
         if is_copied:
@@ -577,9 +572,6 @@ h1 { color: #58a6ff; font-size: 1.6em; margin-bottom: 10px; }
 h2 { color: #58a6ff; margin: 20px 0 12px; font-size: 1.3em; border-bottom: 1px solid #21262d; padding-bottom: 6px; }
 h3 { color: #c9d1d9; margin: 14px 0 8px; font-size: 1.1em; }
 .updated { color: #8b949e; font-size: 0.9em; margin-top: 4px; }
-.back { margin-bottom: 16px; }
-.back a { color: #58a6ff; text-decoration: none; font-size: 0.9em; }
-.back a:hover { text-decoration: underline; }
 .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0; }
 .stat { background: #161b22; border: 1px solid #21262d; border-radius: 8px;
         padding: 16px 24px; text-align: center; min-width: 140px; }
@@ -589,47 +581,6 @@ table { border-collapse: collapse; width: 100%; margin: 8px 0; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #21262d; font-size: 0.85em; }
 th { color: #8b949e; }
 .date-sources { width: auto; }
-.nav-section { margin-bottom: 24px; }
-.folder-nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 20px; }
-.folder-nav a { background: #161b22; border: 1px solid #21262d; border-radius: 6px;
-                padding: 4px 10px; color: #58a6ff; text-decoration: none; font-size: 0.85em; }
-.folder-nav a:hover { background: #1f2937; }
-.folder-nav a.review { color: #f0883e; border-color: #f0883e; }
-.count { color: #8b949e; font-weight: 400; font-size: 0.9em; }
-.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.file-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; position: relative; }
-.thumb { width: 100%; height: 160px; overflow: hidden; display: flex; align-items: center;
-         justify-content: center; background: #0d1117; border-radius: 8px 8px 0 0; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; }
-.vid-thumb { color: #8b949e; font-size: 1.4em; font-weight: 700; }
-.file-info { padding: 8px 10px; overflow: visible; }
-.file-name { font-size: 0.8em; font-weight: 600; color: #c9d1d9; white-space: nowrap;
-             overflow: hidden; text-overflow: ellipsis; }
-.file-date { font-size: 0.75em; color: #8b949e; margin: 2px 0; }
-.file-meta { display: flex; gap: 4px; margin: 4px 0; flex-wrap: wrap; align-items: center; overflow: visible; }
-.file-album { font-size: 0.7em; color: #6e7681; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.badge { font-size: 0.65em; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
-.badge-exif { background: #1f6feb33; color: #58a6ff; }
-.badge-json_taken { background: #23863633; color: #3fb950; }
-.badge-filename { background: #9e6a03aa; color: #e3b341; }
-.badge-json_created { background: #23863633; color: #3fb950; }
-.badge-mtime { background: #f0883e33; color: #f0883e; }
-.badge-none { background: #f8514933; color: #f85149; }
-.badge-json { background: #23863633; color: #3fb950; }
-/* Tooltip via data-tooltip + ::after */
-.has-tooltip { position: relative; cursor: help; }
-.has-tooltip:hover::after {
-    content: attr(data-tooltip);
-    position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%);
-    background: #1c2128; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
-    padding: 6px 10px; font-size: 0.75em; font-weight: 400; white-space: pre-wrap;
-    max-width: 320px; z-index: 100; pointer-events: none; line-height: 1.4;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-}
-/* Finder button */
-.finder-btn { font-size: 0.6em; padding: 1px 6px; border-radius: 10px; font-weight: 600;
-              background: #30363d; color: #c9d1d9; text-decoration: none; border: 1px solid #484f58; }
-.finder-btn:hover { background: #484f58; }
 .copy-btn { font-size: 0.6em; padding: 1px 6px; border-radius: 10px; font-weight: 600;
             background: #30363d; color: #c9d1d9; border: 1px solid #484f58; cursor: pointer;
             font-family: inherit; }
