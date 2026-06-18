@@ -263,6 +263,46 @@ def test_summarize_canonical_coverage_named_album_is_reference(tmp_path):
     assert stats["unique_photos_only_named"] == 0
 
 
+def test_summarize_canonical_coverage_matches_canonical_by_basename(tmp_path):
+    """Same filename in Photos from YYYY counts even when file bytes differ."""
+    from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
+
+    year = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
+    album = tmp_path / "2017-07 Augusta, Keck 4th of July" / "IMG_0466.jpg"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    year.write_bytes(b"canonical-bytes")
+    album.write_bytes(b"named-album-bytes-differ")
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    assert stats["unique_photos_only_named"] == 0
+    assert stats["outside_expected_keepers"] == []
+
+
+def test_summarize_canonical_coverage_matches_canonical_basename_case_insensitive(tmp_path):
+    from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
+
+    year = tmp_path / "Photos from 2023" / "IMG_0466.JPG"
+    album = tmp_path / "2023-10 Greece & Isles" / "IMG_0466.JPG"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    year.write_bytes(b"uppercase-ext-canonical")
+    album.write_bytes(b"uppercase-ext-album")
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    assert stats["unique_photos_only_named"] == 0
+
+
 def test_summarize_canonical_coverage_only_in_named_album(tmp_path):
     from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
 

@@ -104,9 +104,32 @@ def keeper_sort_key(media_path: Path) -> tuple:
     return (canonical_source_priority(media_path), len(str(media_path)), str(media_path))
 
 
-def group_has_canonical_copy(paths: List[Path]) -> bool:
-    """True when any path in the group lives under a canonical Takeout folder."""
-    return any(canonical_source_priority(p) < 3 for p in paths)
+def _canonical_basenames(files: List[Path]) -> Set[str]:
+    """Lowercase basenames of media files under canonical Takeout folders."""
+    return {
+        fpath.name.lower()
+        for fpath in files
+        if canonical_source_priority(fpath) < 3
+    }
+
+
+def group_has_canonical_copy(
+    paths: List[Path],
+    *,
+    canonical_basenames: Optional[Set[str]] = None,
+) -> bool:
+    """
+    True when a duplicate group has a canonical Takeout copy.
+
+    Checks MD5-group paths first, then whether the same basename (case-insensitive)
+    exists under Archive, Locked Folder, or Photos from YYYY elsewhere in the export.
+    Takeout sometimes stores slightly different bytes for the same photo across folders.
+    """
+    if any(canonical_source_priority(p) < 3 for p in paths):
+        return True
+    if not canonical_basenames:
+        return False
+    return any(p.name.lower() in canonical_basenames for p in paths)
 
 
 def summarize_canonical_coverage(
@@ -120,13 +143,14 @@ def summarize_canonical_coverage(
     - named_album_paths: every scanned path under a user-named album folder
     - named_album_references: named-album paths that duplicate a keeper elsewhere
     - unique_photos_only_named: distinct photos with no copy in Archive,
-      Locked Folder, or Photos from YYYY — unexpected if Takeout is complete
+      Locked Folder, or Photos from YYYY (by content or matching basename)
     - outside_expected_keepers: one keeper path per such photo (for listing)
     """
     md5_to_paths: Dict[str, List[Path]] = defaultdict(list)
     for fpath, md5 in file_md5.items():
         md5_to_paths[md5].append(fpath)
 
+    canonical_basenames = _canonical_basenames(files)
     seen_md5: set[str] = set()
     unique_photos_only_named = 0
     outside_expected_keepers: List[Path] = []
@@ -135,7 +159,10 @@ def summarize_canonical_coverage(
         if md5 in seen_md5:
             continue
         seen_md5.add(md5)
-        if not group_has_canonical_copy(md5_to_paths[md5]):
+        if not group_has_canonical_copy(
+            md5_to_paths[md5],
+            canonical_basenames=canonical_basenames,
+        ):
             unique_photos_only_named += 1
             outside_expected_keepers.append(keeper_map[fpath])
 
