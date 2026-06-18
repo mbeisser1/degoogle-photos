@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from degoogle_photos.archive import rar_archive_path
-from degoogle_photos.cli import run
+from degoogle_photos.pipeline import run
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +20,7 @@ def no_browser(monkeypatch):
 def skip_rar_archive(monkeypatch):
     """Integration tests do not run rar."""
     monkeypatch.setattr(
-        "degoogle_photos.cli.create_rar_archive",
+        "degoogle_photos.pipeline.create_rar_archive",
         lambda output_root: rar_archive_path(output_root),
     )
 
