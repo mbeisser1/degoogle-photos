@@ -41,6 +41,11 @@ def is_already_copied(source: Path, dest: Path) -> bool:
         return False
 
 
+def sidecar_dest_path(media_dest: Path) -> Path:
+    """Destination path for a JSON sidecar copied alongside a media file."""
+    return media_dest.parent / (media_dest.name + ".json")
+
+
 def copy_with_sidecar(
     media_path: Path,
     json_path: Optional[Path],
@@ -56,7 +61,6 @@ def copy_with_sidecar(
 
         # Copy JSON sidecar alongside, renamed to match the dest filename
         if json_path and json_path.exists():
-            json_dest = dest_path.parent / (dest_path.name + ".json")
-            shutil.copy2(json_path, json_dest)
+            shutil.copy2(json_path, sidecar_dest_path(dest_path))
 
     return dest_path

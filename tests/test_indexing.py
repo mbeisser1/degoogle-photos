@@ -9,6 +9,8 @@ from degoogle_photos.indexing import (
     _strip_sidecar_suffix,
     find_json_for_media,
     find_all_media_files,
+    find_sidecar_for_media,
+    resolve_sidecars,
 )
 
 
@@ -154,3 +156,49 @@ def test_find_all_media_files_case_insensitive_extensions(tmp_path):
 
 def test_find_all_media_files_empty_dir(tmp_path):
     assert find_all_media_files(tmp_path, MEDIA_EXTENSIONS) == []
+
+
+def test_find_sidecar_for_media_json_suffix(tmp_path):
+    media = tmp_path / "photo.jpg"
+    media.write_bytes(b"x")
+    sidecar = tmp_path / "photo.jpg.json"
+    sidecar.write_text('{"title":"photo.jpg"}', encoding="utf-8")
+    assert find_sidecar_for_media(media) == sidecar
+
+
+def test_find_sidecar_for_media_supplemental_suffix(tmp_path):
+    media = tmp_path / "IMG_3925.WEBP"
+    media.write_bytes(b"x")
+    sidecar = tmp_path / "IMG_3925.WEBP.supplemental-metadata.json"
+    sidecar.write_text('{"title":"IMG_3925.WEBP"}', encoding="utf-8")
+    assert find_sidecar_for_media(media) == sidecar
+
+
+def test_find_sidecar_for_media_prefers_supplemental_over_json(tmp_path):
+    media = tmp_path / "photo.jpg"
+    media.write_bytes(b"x")
+    supplemental = tmp_path / "photo.jpg.supplemental-metadata.json"
+    supplemental.write_text("{}", encoding="utf-8")
+    plain = tmp_path / "photo.jpg.json"
+    plain.write_text("{}", encoding="utf-8")
+    assert find_sidecar_for_media(media) == supplemental
+
+
+def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
+    from degoogle_photos.dedup import hash_files
+
+    keeper = tmp_path / "short.jpg"
+    dupe = tmp_path / "nested" / "longer.jpg"
+    dupe.parent.mkdir()
+    content = b"same"
+    keeper.write_bytes(content)
+    dupe.write_bytes(content)
+    sidecar = tmp_path / "nested" / "longer.jpg.supplemental-metadata.json"
+    sidecar.write_text('{"title":"longer.jpg"}', encoding="utf-8")
+
+    files = [keeper, dupe]
+    file_md5 = hash_files(files)
+    resolved = resolve_sidecars(files, file_md5)
+
+    assert resolved[dupe] == sidecar
+    assert resolved[keeper] == sidecar

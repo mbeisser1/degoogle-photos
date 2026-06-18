@@ -156,6 +156,61 @@ def _strip_sidecar_suffix(json_filename: str) -> Optional[str]:
     return None
 
 
+def find_sidecar_for_media(media_path: Path) -> Optional[Path]:
+    """
+    Find a JSON sidecar in the same directory as a media file.
+
+    Checks Google's known sidecar filename patterns, then falls back to
+    truncated-name globbing for long Takeout filenames.
+    """
+    parent = media_path.parent
+    name = media_path.name
+
+    for suffix in SIDECAR_SUFFIXES:
+        candidate = parent / (name + suffix)
+        if candidate.is_file():
+            return candidate
+
+    prefix = media_path.stem[:40]
+    if len(prefix) >= 10:
+        for candidate in sorted(parent.glob(prefix + "*.json")):
+            if candidate.name.lower() == "metadata.json":
+                continue
+            if _strip_sidecar_suffix(candidate.name) is not None:
+                return candidate
+
+    return None
+
+
+def resolve_sidecars(
+    files: List[Path],
+    file_md5: Dict[Path, str],
+) -> Dict[Path, Optional[Path]]:
+    """
+    Map each media file to a sidecar path for date extraction and copying.
+
+    Uses the adjacent sidecar when present; otherwise borrows one from another
+    file in the same MD5 duplicate group.
+    """
+    md5_to_paths: Dict[str, List[Path]] = defaultdict(list)
+    for fpath, md5 in file_md5.items():
+        md5_to_paths[md5].append(fpath)
+
+    adjacent = {fpath: find_sidecar_for_media(fpath) for fpath in files}
+    resolved: Dict[Path, Optional[Path]] = {}
+    for fpath in files:
+        if adjacent[fpath]:
+            resolved[fpath] = adjacent[fpath]
+            continue
+        for sibling in md5_to_paths[file_md5[fpath]]:
+            if adjacent[sibling]:
+                resolved[fpath] = adjacent[sibling]
+                break
+        else:
+            resolved[fpath] = None
+    return resolved
+
+
 def find_all_media_files(source_root: Path, media_extensions: Set[str]) -> List[Path]:
     """
     Recursively find all media files under source_root.

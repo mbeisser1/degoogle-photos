@@ -1,6 +1,7 @@
 """Integration tests for --dedup-scan mode."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -147,6 +148,76 @@ def test_by_folder_duplicate_symlinks_point_to_keeper(source, output):
     assert fA_link.is_symlink()
     assert fB_link.is_symlink()
     assert fA_link.resolve() == fB_link.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Sidecars
+# ---------------------------------------------------------------------------
+
+def test_dedup_copies_sidecar_next_to_media(tmp_path):
+    src = tmp_path / "source" / "album"
+    src.mkdir(parents=True)
+    media = src / "IMG_20210510_120000.WEBP"
+    media.write_bytes(b"webp-data")
+    sidecar = src / "IMG_20210510_120000.WEBP.supplemental-metadata.json"
+    sidecar.write_text(json.dumps({
+        "title": "IMG_20210510_120000.WEBP",
+        "photoTakenTime": {"timestamp": "1620651600", "formatted": "May 10, 2021"},
+    }), encoding="utf-8")
+    out = tmp_path / "output"
+
+    _run_dedup(make_args(src.parent, out))
+
+    media_dest = out / "2021" / "05" / "IMG_20210510_120000.WEBP"
+    json_dest = out / "2021" / "05" / "IMG_20210510_120000.WEBP.json"
+    assert media_dest.exists()
+    assert json_dest.exists()
+
+
+def test_dedup_sidecar_symlinked_in_by_folder(tmp_path):
+    src = tmp_path / "source" / "album"
+    src.mkdir(parents=True)
+    media = src / "IMG_20210510_120000.WEBP"
+    media.write_bytes(b"webp-data")
+    sidecar = src / "IMG_20210510_120000.WEBP.supplemental-metadata.json"
+    sidecar.write_text(json.dumps({
+        "title": "IMG_20210510_120000.WEBP",
+        "photoTakenTime": {"timestamp": "1620651600", "formatted": "May 10, 2021"},
+    }), encoding="utf-8")
+    out = tmp_path / "output"
+
+    _run_dedup(make_args(src.parent, out))
+
+    sidecar_link = out / "by-folder" / "album" / "IMG_20210510_120000.WEBP.supplemental-metadata.json"
+    json_dest = out / "2021" / "05" / "IMG_20210510_120000.WEBP.json"
+    assert sidecar_link.is_symlink()
+    assert sidecar_link.resolve() == json_dest.resolve()
+
+
+def test_dedup_duplicate_sidecar_symlinks_point_to_keeper_json(tmp_path):
+    src = tmp_path / "source"
+    src.mkdir()
+    (src / "folderA").mkdir()
+    (src / "folderB").mkdir()
+    content = b"duplicate-content"
+    (src / "folderA" / "IMG_20200601_090000.jpg").write_bytes(content)
+    (src / "folderB" / "IMG_20200601_090000.jpg").write_bytes(content)
+    (src / "folderB" / "IMG_20200601_090000.jpg.supplemental-metadata.json").write_text(
+        json.dumps({
+            "title": "IMG_20200601_090000.jpg",
+            "photoTakenTime": {"timestamp": "1591021200", "formatted": "Jun 1, 2020"},
+        }),
+        encoding="utf-8",
+    )
+    out = tmp_path / "output"
+
+    _run_dedup(make_args(src, out))
+
+    keeper_json = out / "2020" / "06" / "IMG_20200601_090000.jpg.json"
+    assert keeper_json.exists()
+    sidecar_link = out / "by-folder" / "folderB" / "IMG_20200601_090000.jpg.supplemental-metadata.json"
+    assert sidecar_link.is_symlink()
+    assert sidecar_link.resolve() == keeper_json.resolve()
 
 
 # ---------------------------------------------------------------------------

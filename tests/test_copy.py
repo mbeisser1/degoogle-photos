@@ -8,6 +8,7 @@ from degoogle_photos.copy import (
     resolve_collision,
     is_already_copied,
     copy_with_sidecar,
+    sidecar_dest_path,
 )
 
 
@@ -92,3 +93,8 @@ def test_copy_with_sidecar_dry_run(tmp_path):
     actual = copy_with_sidecar(media, None, dest, dry_run=True)
     # Dry run should not create any files
     assert not actual.exists()
+
+
+def test_sidecar_dest_path():
+    media_dest = Path("/out/2020/05/photo.jpg")
+    assert sidecar_dest_path(media_dest) == Path("/out/2020/05/photo.jpg.json")

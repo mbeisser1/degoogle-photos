@@ -2,13 +2,19 @@
 
 import argparse
 import os
-import shutil
 import time
 import webbrowser
 from collections import defaultdict
 from pathlib import Path
 
-from .indexing import find_takeout_dirs, build_index, find_json_for_media, find_all_media_files
+from .indexing import (
+    find_takeout_dirs,
+    build_index,
+    find_json_for_media,
+    find_all_media_files,
+    find_sidecar_for_media,
+    resolve_sidecars,
+)
 from .dates import extract_date
 from .metadata import extract_metadata
 from .dedup import (
@@ -18,7 +24,12 @@ from .dedup import (
     group_duplicates_from_hashes,
     keeper_for_files,
 )
-from .copy import compute_dest_path, resolve_collision, is_already_copied, copy_with_sidecar
+from .copy import (
+    compute_dest_path,
+    is_already_copied,
+    copy_with_sidecar,
+    sidecar_dest_path,
+)
 from .albums import create_album_symlinks
 from .logging_util import MigrationLog
 from .report import DedupReport
@@ -87,6 +98,7 @@ def _run_dedup(args):
         file_md5 = hash_files(files, progress_cb=_progress)
         dup_groups = group_duplicates_from_hashes(file_md5)
         keeper_map = keeper_for_files(files, file_md5, dup_groups)
+        sidecar_map = resolve_sidecars(files, file_md5)
     except Exception as e:
         print(f"\nERROR during scan: {e}")
         raise SystemExit(1)
@@ -113,16 +125,17 @@ def _run_dedup(args):
     errors = 0
     copy_interval = max(1, unique_count // 200)
     src_to_dest = {}  # track actual dest for symlink phase
+    src_to_json_dest = {}  # keeper -> copied sidecar dest (if any)
 
     for i, src in enumerate(unique_files, 1):
-        dt, _date_source = extract_date(src, None)
+        json_path = sidecar_map[src]
+        dt, _date_source = extract_date(src, json_path)
         dest = compute_dest_path(output_root, src, dt)
         try:
-            if not dry_run:
-                dest = resolve_collision(dest)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dest)
-            src_to_dest[src] = dest
+            actual_dest = copy_with_sidecar(src, json_path, dest, dry_run)
+            src_to_dest[src] = actual_dest
+            if json_path:
+                src_to_json_dest[src] = sidecar_dest_path(actual_dest)
             copied += 1
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
@@ -158,6 +171,26 @@ def _run_dedup(args):
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
             report.add_error(src, f"symlink: {msg}")
+
+        sidecar = find_sidecar_for_media(src)
+        keeper_json = src_to_json_dest.get(keeper)
+        if sidecar and keeper_json:
+            sidecar_rel = sidecar.relative_to(src_root)
+            sidecar_link = (
+                by_folder_root / src_root.name / sidecar_rel
+                if multi_source
+                else by_folder_root / sidecar_rel
+            )
+            try:
+                if not dry_run:
+                    sidecar_link.parent.mkdir(parents=True, exist_ok=True)
+                    if not sidecar_link.exists():
+                        rel_target = os.path.relpath(keeper_json, sidecar_link.parent)
+                        sidecar_link.symlink_to(rel_target)
+                link_count += 1
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}"
+                report.add_error(sidecar, f"symlink: {msg}")
 
     print(f"  {link_count} aliases created")
 
