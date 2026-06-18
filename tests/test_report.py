@@ -159,3 +159,54 @@ def test_dedup_report_lists_sidecars_inline_and_orphans(tmp_path):
     assert "SYMLINK" in html
     assert "JSON sidecars (photos with no duplicates)" in html
     assert "OTHER.jpg.json" in html
+
+
+def test_dedup_report_source_origins_and_output_distribution(tmp_path):
+    out = tmp_path / "out"
+    report = DedupReport(out, dry_run=False)
+    report.scanned = 4
+    report.total = 4
+    report.copied = 2
+
+    archive_photo = tmp_path / "Archive" / "a.jpg"
+    vacation_photo = tmp_path / "Vacation" / "b.jpg"
+    year_video = tmp_path / "Photos from 2021" / "c.mp4"
+    named_photo = tmp_path / "Challenger" / "d.heic"
+    for p in (archive_photo, vacation_photo, year_video, named_photo):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+
+    report.record_source_path(archive_photo)
+    report.record_source_path(vacation_photo)
+    report.record_source_path(year_video)
+    report.record_source_path(named_photo)
+
+    report.record_keeper_output(
+        archive_photo, out / "2020" / "05" / "a.jpg",
+    )
+    report.record_keeper_output(
+        year_video, out / "2021" / "03" / "c.mp4",
+    )
+    report.set_canonical_coverage({
+        "named_album_paths": 2,
+        "named_album_references": 1,
+        "unique_photos_only_named": 1,
+        "outside_expected_keepers": [named_photo],
+    })
+    report.write()
+
+    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    assert "found outside expected locations" in html
+    assert "duplicate references" in html or "copies whose original" in html
+    assert "Missing canonical copy" in html
+    assert "Named album copies" in html
+    assert "Source album tree" in html
+    assert "non-canonical" in html
+    assert "Output tree" in html
+    assert "folder-tree" in html
+    assert "2020/05" in html
+    assert "2021/03" in html
+    assert "Vacation" in html
+    assert "HEIC" in html
+    assert "MP4" in html
+    assert "JPEG: 1 (1 total)" in html

@@ -6,12 +6,93 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .indexing import canonical_source_label, canonical_album_label, format_outside_expected_locations
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tiff", ".tif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg"}
 
 HTML_UPDATE_INTERVAL = 200  # write HTML every N files
 
 # Generic album names that Google auto-creates — not real user albums
 _GENERIC_ALBUM_RE = re.compile(r'^(Photos from \d{4}|Untitled\(\d+\))$', re.IGNORECASE)
+
+
+def _media_type_label(path: Path) -> str:
+    """Short file-type label for summary tables."""
+    ext = path.suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        return "JPEG"
+    if ext == ".heic":
+        return "HEIC"
+    if ext == ".png":
+        return "PNG"
+    if ext == ".gif":
+        return "GIF"
+    if ext == ".webp":
+        return "WEBP"
+    if ext == ".mp4":
+        return "MP4"
+    if ext == ".mov":
+        return "MOV"
+    if ext in IMAGE_EXTENSIONS:
+        return ext.lstrip(".").upper() or "IMAGE"
+    if ext in VIDEO_EXTENSIONS:
+        return ext.lstrip(".").upper() or "VIDEO"
+    return ext.lstrip(".").upper() or "OTHER"
+
+
+def _output_folder_label(dest_path: Path, output_root: Path) -> str:
+    """YYYY/MM or needs_review relative to the dedup output root."""
+    try:
+        rel = dest_path.parent.relative_to(output_root)
+    except ValueError:
+        return dest_path.parent.name
+    return str(rel).replace("\\", "/")
+
+
+def _format_type_counts(counts: dict) -> str:
+    """Inline summary like 'JPEG: 12, MP4: 3 (15 total)'."""
+    if not counts:
+        return "0 files"
+    parts = [f"{t}: {counts[t]}" for t in sorted(counts)]
+    total = sum(counts.values())
+    return f"{', '.join(parts)} ({total} total)"
+
+
+def _merge_type_counts(target: dict, source: dict) -> dict:
+    for media_type, count in source.items():
+        target[media_type] = target.get(media_type, 0) + count
+    return target
+
+
+def _build_path_tree(path_to_types: dict) -> dict:
+    """
+    Build a nested tree from paths like '2021/05' -> type counts.
+    Each node: {"types": {type: count}, "children": {name: node}}.
+  Leaf and ancestor nodes include rolled-up type totals.
+    """
+    root = {"types": {}, "children": {}}
+
+    for path, types in sorted(path_to_types.items()):
+        parts = path.split("/")
+        node = root
+        _merge_type_counts(node["types"], types)
+        for part in parts:
+            child = node["children"].setdefault(part, {"types": {}, "children": {}})
+            _merge_type_counts(child["types"], types)
+            node = child
+
+    return root
+
+
+def _aggregate_folder_types(by_folder_album_type: dict) -> dict:
+    """Roll up output_by_folder_album_type to folder -> type counts."""
+    folder_types: dict = defaultdict(lambda: defaultdict(int))
+    for folder, by_album in by_folder_album_type.items():
+        for album_counts in by_album.values():
+            for media_type, count in album_counts.items():
+                folder_types[folder][media_type] += count
+    return {folder: dict(types) for folder, types in folder_types.items()}
 
 
 def _html_escape(s: str) -> str:
@@ -304,6 +385,29 @@ class DedupReport:
         self.sidecars_by_media: dict = {}  # media path str -> sidecar entry dict
         self.verification_errors: list = []
         self.errors: list = []   # [{"path": str, "error": str}]
+        self.source_by_category: dict = defaultdict(int)
+        self.source_by_album_type: dict = defaultdict(lambda: defaultdict(int))
+        self.output_by_folder_album_type: dict = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(int))
+        )
+        self.canonical_coverage: dict = {}
+
+    def set_canonical_coverage(self, stats: dict):
+        self.canonical_coverage = stats
+
+    def record_source_path(self, media_path: Path):
+        """Count a scanned source path by canonical category, album, and media type."""
+        album = media_path.parent.name
+        media_type = _media_type_label(media_path)
+        self.source_by_category[canonical_source_label(media_path)] += 1
+        self.source_by_album_type[album][media_type] += 1
+
+    def record_keeper_output(self, keeper_path: Path, dest_path: Path):
+        """Count a copied keeper by output folder, source album, and media type."""
+        folder = _output_folder_label(dest_path, self.output_dir)
+        album = keeper_path.parent.name
+        media_type = _media_type_label(keeper_path)
+        self.output_by_folder_album_type[folder][album][media_type] += 1
 
     def add_group(self, md5: str, files):
         """Add a duplicate group. files is a list of Path; first entry is the keeper."""
@@ -400,11 +504,27 @@ class DedupReport:
         if sidecars_symlink:
             html.append(f'<div class="stat"><span class="num">{sidecars_symlink}</span><span class="label">JSON sidecars symlinked</span></div>')
         html.append(f'<div class="stat"><span class="num">{_fmt_bytes(wasted_bytes)}</span><span class="label">Disk space saved</span></div>')
+        cov = self.canonical_coverage
+        if cov:
+            only_named = cov.get("unique_photos_only_named", 0)
+            html.append(
+                f'<div class="stat"><span class="num">{only_named}</span>'
+                f'<span class="label">Missing canonical copy</span></div>'
+            )
+            named_refs = cov.get("named_album_references", 0)
+            if named_refs:
+                html.append(
+                    f'<div class="stat"><span class="num">{named_refs}</span>'
+                    f'<span class="label">Named album copies</span></div>'
+                )
         html.append('</div>')
 
         if not self.groups:
             html.append('<p style="color:#3fb950;margin-top:16px">No duplicates found.</p>')
         html.append('</section>')
+
+        html.extend(self._render_source_origin_section())
+        html.extend(self._render_output_distribution_section())
 
         # Duplicate groups
         if self.groups:
@@ -481,6 +601,203 @@ class DedupReport:
         html.append(_FOOTER)
         html.append('</body></html>')
         (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+
+    def _render_source_origin_section(self) -> list:
+        """HTML for canonical vs non-canonical source paths."""
+        if not self.source_by_category:
+            return []
+
+        total = sum(self.source_by_category.values())
+        cov = self.canonical_coverage
+        html = [
+            '<section><h2>Canonical vs copies</h2>',
+            '<p class="updated">Takeout should place each photo\'s <strong>original</strong> under '
+            '<strong>Archive</strong>, <strong>Locked Folder</strong>, or '
+            '<strong>Photos from YYYY</strong>. Named albums should only contain '
+            '<strong>copies</strong> of those same files (same bytes, different path). '
+            'Dedup keeps the canonical original and treats named-album paths as copies.</p>',
+        ]
+        if cov:
+            named_paths = cov.get("named_album_paths", 0)
+            named_refs = cov.get("named_album_references", 0)
+            only_named = cov.get("unique_photos_only_named", 0)
+            if only_named:
+                html.append(
+                    f'<p class="non-canonical-callout">'
+                    f'<strong>{only_named:,}</strong> photo(s) found outside expected locations '
+                    f'(not in Archive, Locked Folder, or Photos from YYYY):</p>'
+                )
+                html.append('<pre class="location-list">')
+                for line in format_outside_expected_locations(
+                    cov.get("outside_expected_keepers", []),
+                ):
+                    html.append(_html_escape(line))
+                html.append('</pre>')
+            else:
+                html.append(
+                    '<p style="color:#3fb950;margin:12px 0">'
+                    'Every photo has a canonical original. Named albums contain copies only.</p>'
+                )
+            html.append(
+                f'<p class="updated"><strong>{named_paths:,}</strong> scanned paths are in named '
+                f'albums; <strong>{named_refs:,}</strong> of those are copies whose original '
+                f'is in a canonical folder.</p>'
+            )
+
+        html.append('<h3>Paths by folder type</h3>')
+        html.append(
+            '<p class="updated">Canonical rows are originals. Named album paths are mostly copies.</p>'
+        )
+        html.append('<table class="date-sources"><tr><th>Folder type</th><th>Paths</th></tr>')
+        category_order = [
+            ("Archive", "Archive (original)"),
+            ("Locked Folder", "Locked Folder (original)"),
+            ("Photos from year", "Photos from YYYY (original)"),
+            ("Named album", "Named album (copy)"),
+        ]
+        for category, label in category_order:
+            count = self.source_by_category.get(category, 0)
+            if count:
+                row_class = ' class="non-canonical-row"' if category == "Named album" else ""
+                html.append(
+                    f'<tr{row_class}><td>{_html_escape(label)}</td><td>{count:,}</td></tr>'
+                )
+        html.append(
+            f'<tr><td><strong>Total scanned</strong></td><td><strong>{total:,}</strong></td></tr>'
+        )
+        html.append('</table>')
+
+        if self.source_by_album_type:
+            html.append(
+                '<h3>Source album tree</h3>'
+                '<p class="updated">Canonical folders hold originals; named albums are copies '
+                '(tagged <span class="tree-tag non-canonical">copy</span>).</p>'
+            )
+            html.extend(self._render_album_tree())
+        html.append('</section>')
+        return html
+
+    def _render_album_tree(self) -> list:
+        """Flat album-folder tree (Takeout albums are one level deep)."""
+        canonical_albums = []
+        named_albums = []
+        for album in sorted(self.source_by_album_type):
+            if canonical_album_label(album) == "Named album":
+                named_albums.append(album)
+            else:
+                canonical_albums.append(album)
+
+        html = ['<ul class="folder-tree">', '<li><span class="tree-label">Google Photos/</span>']
+        html.append('<ul>')
+        for album in canonical_albums:
+            html.extend(self._render_album_tree_item(album, non_canonical=False))
+        for album in named_albums:
+            html.extend(self._render_album_tree_item(album, non_canonical=True))
+        html.append('</ul></li></ul>')
+        return html
+
+    def _render_album_tree_item(self, album: str, non_canonical: bool) -> list:
+        counts = dict(self.source_by_album_type[album])
+        label = _html_escape(album)
+        tag = ' <span class="tree-tag non-canonical">copy</span>' if non_canonical else ""
+        return [
+            '<li>',
+            f'<span class="tree-label">{label}/</span>{tag} ',
+            f'<span class="tree-counts">{_html_escape(_format_type_counts(counts))}</span>',
+            '</li>',
+        ]
+
+    def _render_output_distribution_section(self) -> list:
+        """HTML tree of output YYYY/MM folders with file-type counts."""
+        if not self.output_by_folder_album_type:
+            return []
+
+        folder_types = _aggregate_folder_types(self.output_by_folder_album_type)
+        tree = _build_path_tree(folder_types)
+        root_counts = tree["types"]
+
+        html = [
+            '<section><h2>Output tree</h2>',
+            '<p class="updated">Unique keeper copies under <code>YYYY/MM/</code>. '
+            'Each folder shows rolled-up counts by file type.</p>',
+            '<ul class="folder-tree">',
+            '<li>',
+            f'<span class="tree-label">{_html_escape(self.output_dir.name)}/</span> ',
+            f'<span class="tree-counts">{_html_escape(_format_type_counts(root_counts))}</span>',
+        ]
+        html.extend(self._render_output_tree_children(tree["children"], depth=1))
+        html.append('</li></ul>')
+
+        html.append(
+            '<h3>By month and source album</h3>'
+            '<p class="updated">Expand a month to see which source album each keeper came from.</p>'
+        )
+        for folder in sorted(self.output_by_folder_album_type.keys()):
+            by_album = self.output_by_folder_album_type[folder]
+            folder_total = sum(
+                count for album_counts in by_album.values() for count in album_counts.values()
+            )
+            month_counts = folder_types.get(folder, {})
+            html.append(
+                f'<details><summary><strong>{_html_escape(folder)}</strong> '
+                f'&mdash; {_html_escape(_format_type_counts(month_counts))}</summary>'
+            )
+            html.extend(self._render_album_type_table(by_album))
+            html.append('</details>')
+        html.append('</section>')
+        return html
+
+    def _render_output_tree_children(self, children: dict, depth: int) -> list:
+        if not children:
+            return []
+        html = ['<ul>']
+        for name in sorted(children):
+            node = children[name]
+            suffix = "/" if node["children"] else ""
+            html.append('<li>')
+            html.append(
+                f'<span class="tree-label">{_html_escape(name)}{suffix}</span> '
+                f'<span class="tree-counts">{_html_escape(_format_type_counts(node["types"]))}</span>'
+            )
+            html.extend(self._render_output_tree_children(node["children"], depth + 1))
+            html.append('</li>')
+        html.append('</ul>')
+        return html
+
+    def _render_album_type_table(self, by_album: dict) -> list:
+        """Render album rows with dynamic media-type columns."""
+        type_columns = sorted({
+            media_type
+            for album_counts in by_album.values()
+            for media_type in album_counts
+        })
+        if not type_columns:
+            return []
+
+        html = ['<table><tr><th>Album</th>']
+        html.extend(f'<th>{_html_escape(t)}</th>' for t in type_columns)
+        html.append('<th>Total</th></tr>')
+
+        for album in sorted(by_album.keys()):
+            counts = by_album[album]
+            row_total = sum(counts.values())
+            html.append(f'<tr><td>{_html_escape(album)}</td>')
+            for media_type in type_columns:
+                html.append(f'<td>{counts.get(media_type, 0)}</td>')
+            html.append(f'<td><strong>{row_total}</strong></td></tr>')
+
+        col_totals = {t: 0 for t in type_columns}
+        grand_total = 0
+        for counts in by_album.values():
+            for media_type, count in counts.items():
+                col_totals[media_type] += count
+                grand_total += count
+        html.append('<tr><td><strong>Total</strong></td>')
+        for media_type in type_columns:
+            html.append(f'<td><strong>{col_totals[media_type]}</strong></td>')
+        html.append(f'<td><strong>{grand_total}</strong></td></tr>')
+        html.append('</table>')
+        return html
 
     def _render_dedup_row(
         self, is_copied: bool, path: str, size: int, kind: str, name: str,
@@ -602,4 +919,17 @@ code { font-size: 0.8em; color: #8b949e; }
                text-align: center; font-size: 0.8em; color: #8b949e; }
 .site-footer a { color: #58a6ff; text-decoration: none; }
 .site-footer a:hover { text-decoration: underline; }
+.non-canonical-callout { background: #f0883e22; border: 1px solid #f0883e66; border-radius: 8px;
+                         padding: 12px 16px; margin: 12px 0; color: #f0883e; }
+.non-canonical-row td { color: #f0883e; }
+.folder-tree { list-style: none; margin: 8px 0 16px 0; padding-left: 0; }
+.folder-tree ul { list-style: none; margin: 4px 0; padding-left: 1.4em; border-left: 1px solid #21262d; }
+.folder-tree li { margin: 4px 0; font-size: 0.9em; }
+.tree-label { color: #58a6ff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tree-counts { color: #8b949e; font-size: 0.9em; margin-left: 6px; }
+.tree-tag { font-size: 0.75em; padding: 1px 6px; border-radius: 10px; font-weight: 600; margin-left: 4px; }
+.tree-tag.non-canonical { background: #f0883e33; color: #f0883e; }
+.location-list { background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+                 padding: 12px 16px; margin: 8px 0 16px; font-size: 0.85em;
+                 line-height: 1.6; overflow-x: auto; white-space: pre-wrap; }
 """

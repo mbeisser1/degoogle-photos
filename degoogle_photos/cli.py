@@ -11,6 +11,9 @@ from .indexing import (
     build_index,
     find_json_for_media,
     find_all_media_files,
+    find_all_sidecar_files,
+    summarize_canonical_coverage,
+    format_outside_expected_locations,
     resolve_sidecars,
     keeper_sort_key,
 )
@@ -68,16 +71,24 @@ def _run_dedup(args):
     # Phase 1: Find all media files across all source roots
     file_to_source = {}   # Path -> source_root it came from
     all_files = []
+    all_sidecars = []
     for src in source_roots:
         print(f"Phase 1: Scanning '{src}'...")
         found = find_all_media_files(src, MEDIA_EXTENSIONS)
+        sidecars = find_all_sidecar_files(src)
         print(f"  Found {len(found)} media files")
+        print(f"  Found {len(sidecars)} JSON sidecar files")
         for f in found:
             file_to_source[f] = src
+            report.record_source_path(f)
         all_files.extend(found)
+        all_sidecars.extend(sidecars)
 
     files = all_files
-    print(f"  Total: {len(files)} media files across {len(source_roots)} source(s)")
+    print(
+        f"  Total: {len(files)} media files, {len(all_sidecars)} JSON sidecars "
+        f"across {len(source_roots)} source(s)"
+    )
     report.total = len(files)
 
     # Phase 2: Compute MD5s
@@ -115,12 +126,30 @@ def _run_dedup(args):
 
     dupe_file_count = len(skipped_paths)
     unique_count = len(files) - dupe_file_count
+    canonical_stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    report.set_canonical_coverage(canonical_stats)
     print(f"  Scanned {len(files)} files")
     if dupe_file_count:
         print(
             f"  {dupe_file_count} skipped — same photo / video already in another folder "
             f"(e.g. 'Photos from 2021' and a named album)"
         )
+    named_paths = canonical_stats["named_album_paths"]
+    named_refs = canonical_stats["named_album_references"]
+    only_named = canonical_stats["unique_photos_only_named"]
+    if named_paths:
+        print(
+            f"  {named_paths} copy paths in named albums "
+            f"({named_refs} point at a canonical original)"
+        )
+    if only_named:
+        print(f"  WARNING: {only_named} photo(s) found outside expected locations:")
+        for line in format_outside_expected_locations(
+            canonical_stats["outside_expected_keepers"],
+        ):
+            print(line)
+    else:
+        print("  All photos have a canonical original (as expected)")
     print(f"  {unique_count} photos to copy")
 
     # Phase 3: Copy unique files into YYYY/MM/ and mirror source tree as symlinks
@@ -142,6 +171,7 @@ def _run_dedup(args):
             src_to_dest[src] = actual_dest
             if json_path:
                 src_to_json_dest[src] = sidecar_dest_path(actual_dest)
+            report.record_keeper_output(src, actual_dest)
             copied += 1
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"

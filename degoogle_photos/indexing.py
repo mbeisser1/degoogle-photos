@@ -13,6 +13,22 @@ _CANONICAL_LOCKED_RE = re.compile(r"^Locked Folder$", re.IGNORECASE)
 _CANONICAL_YEAR_ALBUM_RE = re.compile(r"^Photos from \d{4}$", re.IGNORECASE)
 
 
+def canonical_source_label(media_path: Path) -> str:
+    """Human-readable category for a media file's source album folder."""
+    return canonical_album_label(media_path.parent.name)
+
+
+def canonical_album_label(album_name: str) -> str:
+    """Human-readable category for a Takeout album folder name."""
+    if _CANONICAL_ARCHIVE_RE.match(album_name):
+        return "Archive"
+    if _CANONICAL_LOCKED_RE.match(album_name):
+        return "Locked Folder"
+    if _CANONICAL_YEAR_ALBUM_RE.match(album_name):
+        return "Photos from year"
+    return "Named album"
+
+
 def canonical_source_priority(media_path: Path) -> int:
     """
     Preference order for which duplicate copy to keep.
@@ -33,6 +49,108 @@ def canonical_source_priority(media_path: Path) -> int:
 def keeper_sort_key(media_path: Path) -> tuple:
     """Sort key for duplicate keeper selection (lower = preferred)."""
     return (canonical_source_priority(media_path), len(str(media_path)), str(media_path))
+
+
+def group_has_canonical_copy(paths: List[Path]) -> bool:
+    """True when any path in the group lives under a canonical Takeout folder."""
+    return any(canonical_source_priority(p) < 3 for p in paths)
+
+
+def summarize_canonical_coverage(
+    files: List[Path],
+    file_md5: Dict[Path, str],
+    keeper_map: Dict[Path, Path],
+) -> dict:
+    """
+    Summarize how source paths relate to canonical Takeout folders.
+
+    - named_album_paths: every scanned path under a user-named album folder
+    - named_album_references: named-album paths that duplicate a keeper elsewhere
+    - unique_photos_only_named: distinct photos with no copy in Archive,
+      Locked Folder, or Photos from YYYY — unexpected if Takeout is complete
+    - outside_expected_keepers: one keeper path per such photo (for listing)
+    """
+    md5_to_paths: Dict[str, List[Path]] = defaultdict(list)
+    for fpath, md5 in file_md5.items():
+        md5_to_paths[md5].append(fpath)
+
+    seen_md5: set[str] = set()
+    unique_photos_only_named = 0
+    outside_expected_keepers: List[Path] = []
+    for fpath in files:
+        md5 = file_md5[fpath]
+        if md5 in seen_md5:
+            continue
+        seen_md5.add(md5)
+        if not group_has_canonical_copy(md5_to_paths[md5]):
+            unique_photos_only_named += 1
+            outside_expected_keepers.append(keeper_map[fpath])
+
+    named_album_paths = 0
+    named_album_references = 0
+    for fpath in files:
+        if canonical_album_label(fpath.parent.name) != "Named album":
+            continue
+        named_album_paths += 1
+        if keeper_map[fpath] != fpath:
+            named_album_references += 1
+
+    outside_expected_keepers.sort(key=lambda p: (p.parent.name.lower(), p.name.lower()))
+
+    return {
+        "named_album_paths": named_album_paths,
+        "named_album_references": named_album_references,
+        "unique_photos_only_named": unique_photos_only_named,
+        "outside_expected_keepers": outside_expected_keepers,
+    }
+
+
+def format_outside_expected_locations(
+    keeper_paths: List[Path],
+    *,
+    max_files_per_album: int = 3,
+    max_album_lines: int = 30,
+) -> List[str]:
+    """
+    Group outside-expected keepers by album for concise CLI/report output.
+
+    All ``Photos from YYYY`` albums are rolled into one ``Photos from YYYY`` line.
+    """
+    by_album: Dict[str, List[str]] = defaultdict(list)
+    year_filenames: List[str] = []
+
+    for path in keeper_paths:
+        album = path.parent.name
+        if _CANONICAL_YEAR_ALBUM_RE.match(album):
+            year_filenames.append(path.name)
+        else:
+            by_album[album].append(path.name)
+
+    lines: List[str] = []
+    if year_filenames:
+        lines.append(_format_album_location_line(
+            "Photos from YYYY", sorted(year_filenames), max_files_per_album,
+        ))
+
+    for album in sorted(by_album):
+        lines.append(_format_album_location_line(
+            album, sorted(by_album[album]), max_files_per_album,
+        ))
+
+    if len(lines) > max_album_lines:
+        omitted = len(lines) - max_album_lines
+        lines = lines[:max_album_lines]
+        lines.append(f"    … and {omitted} more album(s)")
+
+    return lines
+
+
+def _format_album_location_line(album: str, filenames: List[str], max_show: int) -> str:
+    count = len(filenames)
+    if count <= max_show:
+        return f"    {album}/ ({count}): {', '.join(filenames)}"
+    shown = ", ".join(filenames[:max_show])
+    return f"    {album}/ ({count}): {shown}, … and {count - max_show} more"
 
 
 def find_takeout_dirs(source_root: Path) -> List[Path]:
@@ -288,6 +406,23 @@ def find_all_media_files(source_root: Path, media_extensions: Set[str]) -> List[
     files = []
     for fpath in source_root.rglob("*"):
         if fpath.is_file() and fpath.suffix.lower() in media_extensions:
+            files.append(fpath)
+    return files
+
+
+def find_all_sidecar_files(source_root: Path) -> List[Path]:
+    """
+    Recursively find JSON sidecar files under source_root.
+
+    Skips album-level metadata.json; includes .json, .supplemental-metadata.json, etc.
+    """
+    files = []
+    for fpath in source_root.rglob("*.json"):
+        if not fpath.is_file():
+            continue
+        if fpath.name.lower() == "metadata.json":
+            continue
+        if _strip_sidecar_suffix(fpath.name):
             files.append(fpath)
     return files
 

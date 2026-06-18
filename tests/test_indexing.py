@@ -9,9 +9,14 @@ from degoogle_photos.indexing import (
     _strip_sidecar_suffix,
     find_json_for_media,
     find_all_media_files,
+    find_all_sidecar_files,
     find_sidecar_for_media,
     resolve_sidecars,
     canonical_source_priority,
+    canonical_source_label,
+    canonical_album_label,
+    summarize_canonical_coverage,
+    format_outside_expected_locations,
     keeper_sort_key,
 )
 
@@ -160,6 +165,21 @@ def test_find_all_media_files_empty_dir(tmp_path):
     assert find_all_media_files(tmp_path, MEDIA_EXTENSIONS) == []
 
 
+def test_find_all_sidecar_files(tmp_path):
+    album = tmp_path / "Photos from 2021"
+    album.mkdir(parents=True)
+    (album / "photo.jpg.json").write_text("{}", encoding="utf-8")
+    (album / "clip.mp4.supplemental-metadata.json").write_text("{}", encoding="utf-8")
+    (album / "metadata.json").write_text("{}", encoding="utf-8")
+    (album / "readme.txt").write_bytes(b"x")
+
+    found = find_all_sidecar_files(tmp_path)
+    assert len(found) == 2
+    names = {p.name for p in found}
+    assert "photo.jpg.json" in names
+    assert "clip.mp4.supplemental-metadata.json" in names
+
+
 def test_find_sidecar_for_media_json_suffix(tmp_path):
     media = tmp_path / "photo.jpg"
     media.write_bytes(b"x")
@@ -253,6 +273,90 @@ def test_resolve_sidecars_borrows_from_duplicate_group(tmp_path):
 
     assert resolved[dupe] == sidecar
     assert resolved[keeper] == sidecar
+
+
+def test_canonical_source_label(tmp_path):
+    archive = tmp_path / "Archive" / "photo.jpg"
+    locked = tmp_path / "Locked Folder" / "photo.jpg"
+    year = tmp_path / "Photos from 2021" / "photo.jpg"
+    named = tmp_path / "My Vacation" / "photo.jpg"
+    for p in (archive, locked, year, named):
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    assert canonical_source_label(archive) == "Archive"
+    assert canonical_source_label(locked) == "Locked Folder"
+    assert canonical_source_label(year) == "Photos from year"
+    assert canonical_source_label(named) == "Named album"
+
+
+def test_canonical_album_label():
+    assert canonical_album_label("Archive") == "Archive"
+    assert canonical_album_label("Photos from 2021") == "Photos from year"
+    assert canonical_album_label("My Vacation") == "Named album"
+
+
+def test_summarize_canonical_coverage_named_album_is_reference(tmp_path):
+    from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
+
+    year = tmp_path / "Photos from 2021" / "IMG.jpg"
+    album = tmp_path / "Vacation" / "IMG.jpg"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    content = b"same"
+    year.write_bytes(content)
+    album.write_bytes(content)
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    assert stats["named_album_paths"] == 1
+    assert stats["named_album_references"] == 1
+    assert stats["unique_photos_only_named"] == 0
+
+
+def test_summarize_canonical_coverage_only_in_named_album(tmp_path):
+    from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
+
+    album = tmp_path / "Vacation" / "solo.jpg"
+    album.parent.mkdir(parents=True)
+    album.write_bytes(b"solo")
+
+    files = [album]
+    file_md5 = hash_files(files)
+    dup_groups = group_duplicates_from_hashes(file_md5)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map)
+    assert stats["named_album_paths"] == 1
+    assert stats["named_album_references"] == 0
+    assert stats["unique_photos_only_named"] == 1
+    assert len(stats["outside_expected_keepers"]) == 1
+    assert stats["outside_expected_keepers"][0] == album
+
+
+def test_format_outside_expected_locations_groups_year_albums(tmp_path):
+    paths = [
+        tmp_path / "Photos from 2019" / "a.jpg",
+        tmp_path / "Photos from 2021" / "b.jpg",
+        tmp_path / "Photos from 2024" / "c.jpg",
+        tmp_path / "Vacation" / "d.jpg",
+        tmp_path / "Vacation" / "e.jpg",
+    ]
+    lines = format_outside_expected_locations(paths)
+    assert any("Photos from YYYY/ (3):" in line for line in lines)
+    assert any(line.startswith("    Vacation/ (2):") for line in lines)
+    assert not any("Photos from 2019" in line for line in lines)
+
+
+def test_format_outside_expected_locations_abbreviates_large_album(tmp_path):
+    paths = [tmp_path / "Big Album" / f"img{i:03d}.jpg" for i in range(10)]
+    lines = format_outside_expected_locations(paths, max_files_per_album=2)
+    assert len(lines) == 1
+    assert "Big Album/ (10):" in lines[0]
+    assert "… and 8 more" in lines[0]
 
 
 def test_canonical_source_priority_order(tmp_path):
