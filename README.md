@@ -21,7 +21,7 @@ degoogle-photos --dry-run
 
 If you pass the Takeout root (`.../Takeout`) instead of `Google Photos/`, the tool will use `Google Photos/` automatically and print a note.
 
-Use `python3 -m degoogle_photos.cli` if the `degoogle-photos` command is not on your PATH.
+Use `python3 dedup_photos.py` or `python3 -m degoogle_photos.cli` if the `degoogle-photos` command is not on your PATH.
 
 Runs are resumable — already-copied files are skipped on restart.
 
@@ -54,7 +54,7 @@ One copy per duplicate group lands in `YYYY/MM/`; the original Takeout album lay
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--source PATH [PATH ...]` | `.` | Google Photos/ folder(s) from Takeout |
+| `--source PATH` | `.` | Google Photos/ folder from Takeout |
 | `--output PATH` | `./DeGoogled Photos` | Output directory |
 | `--dry-run` | off | Report only, no copies |
 

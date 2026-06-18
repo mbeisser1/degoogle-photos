@@ -40,45 +40,28 @@ MEDIA_EXTENSIONS = {
 
 def run(args):
     """
-    Scan --source folders, copy one keeper per unique MD5 to --output (date-organised),
+    Scan --source, copy one keeper per unique MD5 to --output (date-organised),
     and recreate the source tree under by-folder/ as symlinks. Source is never modified.
     """
-    source_roots = [p.resolve() for p in args.source]
+    if not args.source.is_dir():
+        print(f"ERROR: --source '{args.source}' is not a directory.")
+        raise SystemExit(1)
+
+    source_root = validate_source_root(args.source)
     output_root = args.output
     dry_run = args.dry_run
-    multi_source = len(source_roots) > 1
-
-    for src in source_roots:
-        if not src.is_dir():
-            print(f"ERROR: --source '{src}' is not a directory.")
-            raise SystemExit(1)
-
-    source_roots = [validate_source_root(src) for src in source_roots]
 
     report = DedupReport(output_root, dry_run)
     start = time.time()
 
-    # Phase 1: Find all media files across all source roots
-    file_to_source = {}   # Path -> source_root it came from
-    all_files = []
-    all_sidecars = []
-    for src in source_roots:
-        print(f"Phase 1: Scanning '{src}'...")
-        found = find_all_media_files(src, MEDIA_EXTENSIONS)
-        sidecars = find_all_sidecar_files(src)
-        print(f"  Found {len(found)} media files")
-        print(f"  Found {len(sidecars)} JSON sidecar files")
-        for f in found:
-            file_to_source[f] = src
-            report.record_source_path(f)
-        all_files.extend(found)
-        all_sidecars.extend(sidecars)
-
-    files = all_files
-    print(
-        f"  Total: {len(files)} media files, {len(all_sidecars)} JSON sidecars "
-        f"across {len(source_roots)} source(s)"
-    )
+    # Phase 1: Find all media files
+    print(f"Phase 1: Scanning '{source_root}'...")
+    files = find_all_media_files(source_root, MEDIA_EXTENSIONS)
+    sidecars = find_all_sidecar_files(source_root)
+    print(f"  Found {len(files)} media files")
+    print(f"  Found {len(sidecars)} JSON sidecar files")
+    for f in files:
+        report.record_source_path(f)
     report.total = len(files)
 
     # Phase 2: Compute MD5s
@@ -176,7 +159,6 @@ def run(args):
     report.copied = copied
 
     # Phase 4: Recreate source folder tree under by-folder/ using symlinks
-    # With multiple sources, prefix each tree with the source folder's name.
     by_folder_root = output_root / "by-folder"
     action4 = "Would create" if dry_run else "Creating"
     print(f"\nPhase 4: {action4} folder aliases under '{by_folder_root}'...")
@@ -185,9 +167,8 @@ def run(args):
     for src in files:
         keeper = keeper_map[src]
         dest = src_to_dest[keeper]
-        src_root = file_to_source[src]
-        rel = src.relative_to(src_root)
-        link_path = by_folder_root / src_root.name / rel if multi_source else by_folder_root / rel
+        rel = src.relative_to(source_root)
+        link_path = by_folder_root / rel
         try:
             if not dry_run:
                 ensure_symlink(link_path, dest)
@@ -200,12 +181,7 @@ def run(args):
         sidecar = sidecar_map.get(src)
         keeper_json = src_to_json_dest.get(keeper)
         if sidecar and keeper_json:
-            sidecar_rel = sidecar.relative_to(src_root)
-            sidecar_link = (
-                by_folder_root / src_root.name / sidecar_rel
-                if multi_source
-                else by_folder_root / sidecar_rel
-            )
+            sidecar_link = by_folder_root / sidecar.relative_to(source_root)
             try:
                 if not dry_run:
                     ensure_symlink(sidecar_link, keeper_json)
@@ -269,9 +245,7 @@ def run(args):
         print(f"Verification:        passed")
     print(f"Time elapsed:        {elapsed:.1f}s")
     print(f"{'='*60}")
-    for src in source_roots:
-        label = f"Source ({src.name}):" if multi_source else "Source:      "
-        print(f"{label} {src}")
+    print(f"Source:      {source_root}")
     print(f"\nDate folders: {output_root.resolve()}")
     print(f"By folder:    {by_folder_root.resolve()}")
     print(f"Report:       {report_index.resolve()}")
@@ -285,8 +259,8 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would be done without copying or deleting")
-    parser.add_argument("--source", type=Path, nargs="+", default=[Path.cwd()],
-                        help="Google Photos/ folder from a Takeout extract (repeat for multiple)")
+    parser.add_argument("--source", type=Path, default=Path.cwd(),
+                        help="Google Photos/ folder from a Takeout extract")
     parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogled Photos",
                         help="Output root (default: ./DeGoogled Photos)")
     args = parser.parse_args()

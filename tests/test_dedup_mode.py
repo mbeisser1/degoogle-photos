@@ -16,8 +16,7 @@ def no_browser(monkeypatch):
 
 
 def make_args(source, output, dry_run=False):
-    sources = source if isinstance(source, list) else [source]
-    return argparse.Namespace(source=sources, output=output, dry_run=dry_run)
+    return argparse.Namespace(source=source, output=output, dry_run=dry_run)
 
 
 def media_files_in_output(output: Path):
@@ -342,57 +341,11 @@ def test_all_files_unique_no_groups(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multiple sources
+# by-folder layout
 # ---------------------------------------------------------------------------
 
-def test_multi_source_files_from_both_sources_are_copied(tmp_path):
-    src1 = tmp_path / "drive1"
-    src2 = tmp_path / "drive2"
-    (src1 / "Photos from 2020").mkdir(parents=True)
-    (src2 / "Photos from 2021").mkdir(parents=True)
-    (src1 / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"from-drive1")
-    (src2 / "Photos from 2021" / "IMG_20201201_080000.jpg").write_bytes(b"from-drive2")
-    out = tmp_path / "output"
-
-    run(make_args([src1, src2], out))
-
-    copied = media_files_in_output(out)
-    assert len(copied) == 2
-
-
-def test_multi_source_cross_source_duplicates_are_deduped(tmp_path):
-    src1 = tmp_path / "drive1"
-    src2 = tmp_path / "drive2"
-    (src1 / "Photos from 2020").mkdir(parents=True)
-    (src2 / "Photos from 2020").mkdir(parents=True)
-    (src1 / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"same-content")
-    (src2 / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"same-content")
-    out = tmp_path / "output"
-
-    run(make_args([src1, src2], out))
-
-    copied = media_files_in_output(out)
-    assert len(copied) == 1
-
-
-def test_multi_source_by_folder_prefixed_with_source_name(tmp_path):
-    src1 = tmp_path / "drive1"
-    src2 = tmp_path / "drive2"
-    (src1 / "Photos from 2020").mkdir(parents=True)
-    (src2 / "Photos from 2021").mkdir(parents=True)
-    (src1 / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"aaa")
-    (src2 / "Photos from 2021" / "IMG_20201201_080000.jpg").write_bytes(b"bbb")
-    out = tmp_path / "output"
-
-    run(make_args([src1, src2], out))
-
-    by_folder = out / "by-folder"
-    assert (by_folder / "drive1").is_dir()
-    assert (by_folder / "drive2").is_dir()
-
-
-def test_single_source_by_folder_has_no_prefix(tmp_path):
-    """Single source should not add an extra source-name prefix to by-folder/."""
+def test_by_folder_mirrors_album_subfolders(tmp_path):
+    """by-folder/ mirrors album paths directly under the Google Photos/ root."""
     src = tmp_path / "Google Photos"
     (src / "Photos from 2020" / "subfolder").mkdir(parents=True)
     (src / "Photos from 2020" / "subfolder" / "IMG_20200510_120000.jpg").write_bytes(b"aaa")
@@ -403,24 +356,6 @@ def test_single_source_by_folder_has_no_prefix(tmp_path):
     by_folder = out / "by-folder"
     assert (by_folder / "Photos from 2020" / "subfolder").is_dir()
     assert not (by_folder / "Google Photos").exists()
-
-
-def test_multi_source_symlinks_resolve_across_sources(tmp_path):
-    """Symlinks from both sources should resolve to actual copied files."""
-    src1 = tmp_path / "drive1"
-    src2 = tmp_path / "drive2"
-    (src1 / "Photos from 2020").mkdir(parents=True)
-    (src2 / "Photos from 2021").mkdir(parents=True)
-    (src1 / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"aaa")
-    (src2 / "Photos from 2021" / "IMG_20201201_080000.jpg").write_bytes(b"bbb")
-    out = tmp_path / "output"
-
-    run(make_args([src1, src2], out))
-
-    link1 = out / "by-folder" / "drive1" / "Photos from 2020" / "IMG_20200510_120000.jpg"
-    link2 = out / "by-folder" / "drive2" / "Photos from 2021" / "IMG_20201201_080000.jpg"
-    assert link1.is_symlink() and link1.resolve().read_bytes() == b"aaa"
-    assert link2.is_symlink() and link2.resolve().read_bytes() == b"bbb"
 
 
 def test_no_date_file_goes_to_needs_review(tmp_path):
