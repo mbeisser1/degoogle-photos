@@ -25,8 +25,10 @@ def skip_rar_archive(monkeypatch):
     )
 
 
-def make_args(source, output, dry_run=False):
-    return argparse.Namespace(source=source, output=output, dry_run=dry_run)
+def make_args(source, output, dry_run=False, hash_workers=2):
+    return argparse.Namespace(
+        source=source, output=output, dry_run=dry_run, hash_workers=hash_workers,
+    )
 
 
 def media_files_in_output(output: Path):

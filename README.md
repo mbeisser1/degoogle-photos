@@ -43,6 +43,7 @@ One copy per duplicate group lands in `YYYY/MM/`; the original Takeout album lay
 |------|---------|-------------|
 | `--source PATH` | `.` | Google Photos/ folder from Takeout |
 | `--output PATH` | `./DeGoogled Photos` | Output directory |
+| `--hash-workers N` | `2` | Parallel MD5 threads (`1` = single-threaded; higher on SSD) |
 | `--dry-run` | off | Report only, no copies or archive |
 
 ## Changes from upstream

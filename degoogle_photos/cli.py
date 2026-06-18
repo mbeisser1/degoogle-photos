@@ -66,13 +66,15 @@ def run(args):
     report.total = len(files)
 
     # Phase 2: Compute MD5s
-    print(f"\nPhase 2: Computing checksums...")
+    hash_workers = max(1, args.hash_workers)
+    print(f"\nPhase 2: Computing checksums ({hash_workers} workers)...")
     progress_interval = max(1, len(files) // 200)  # ~200 progress updates
+    hash_start = time.time()
 
     def _progress(current, total):
         report.scanned = current
         if current % progress_interval == 0 or current == total:
-            elapsed = time.time() - start
+            elapsed = time.time() - hash_start
             rate = current / elapsed if elapsed > 0 else 0
             pct = current / total * 100 if total > 0 else 0
             print(
@@ -81,7 +83,8 @@ def run(args):
             )
 
     try:
-        file_md5 = hash_files(files, progress_cb=_progress)
+        file_md5 = hash_files(files, progress_cb=_progress, workers=hash_workers)
+        hash_elapsed = time.time() - hash_start
         dup_groups = group_duplicates_from_hashes(file_md5)
         keeper_map = keeper_for_files(files, file_md5, dup_groups)
         sidecar_map = resolve_sidecars(files, file_md5)
@@ -90,6 +93,9 @@ def run(args):
         raise SystemExit(1)
 
     print()  # newline after progress bar
+    if files:
+        avg_rate = len(files) / hash_elapsed if hash_elapsed > 0 else 0
+        print(f"  Checksums computed in {hash_elapsed:.1f}s ({avg_rate:.0f} files/sec avg)")
 
     # Build the set of files that are duplicates (all but the keeper per group)
     skipped_paths = set()
@@ -244,6 +250,7 @@ def run(args):
     print(f"{prefix}Summary")
     print(f"{'='*60}")
     print(f"Paths scanned:           {report.scanned}")
+    print(f"Checksum time:           {hash_elapsed:.1f}s")
     if dupe_file_count:
         print(f"Duplicate paths skipped: {dupe_file_count}  (same photo / video in another folder)")
     print(f"Photos copied:           {copied}")
@@ -276,6 +283,8 @@ def main():
                         help="Google Photos/ folder from a Takeout extract")
     parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogled Photos",
                         help="Output root (default: ./DeGoogled Photos)")
+    parser.add_argument("--hash-workers", type=int, default=2, metavar="N",
+                        help="Parallel MD5 hash threads (default: 2; use 1 for single-threaded)")
     args = parser.parse_args()
     run(args)
 

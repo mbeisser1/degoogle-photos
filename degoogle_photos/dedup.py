@@ -1,7 +1,6 @@
 """Deduplication via MD5 hashing."""
 
 import hashlib
-import os
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,10 +9,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .indexing import keeper_sort_key
 
+DEFAULT_HASH_WORKERS = 2
+
 
 def _default_hash_workers() -> int:
-    """Thread count for parallel file reads + MD5 (I/O-bound on typical storage)."""
-    return min(32, (os.cpu_count() or 4) + 4)
+    """Default thread count for parallel file reads + MD5 (HDD-friendly)."""
+    return DEFAULT_HASH_WORKERS
 
 
 def compute_md5(file_path: Path) -> str:

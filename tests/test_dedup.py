@@ -4,6 +4,7 @@ from pathlib import Path
 
 from degoogle_photos.dedup import (
     compute_md5,
+    DEFAULT_HASH_WORKERS,
     group_duplicates,
     hash_files,
     group_duplicates_from_hashes,
@@ -24,6 +25,10 @@ def test_compute_md5_different_content(tmp_path):
     f1.write_bytes(b"aaa")
     f2.write_bytes(b"bbb")
     assert compute_md5(f1) != compute_md5(f2)
+
+
+def test_default_hash_workers():
+    assert DEFAULT_HASH_WORKERS == 2
 
 
 def test_group_duplicates_no_dupes(tmp_path):
