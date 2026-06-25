@@ -27,7 +27,7 @@ def skip_rar_archive(monkeypatch):
     )
 
 
-def make_args(source, output, dry_run=False, hash_workers=2, skip_archive=False, no_open_browser=True):
+def make_args(source, output, dry_run=False, hash_workers=2, skip_archive=True, no_open_browser=True):
     return argparse.Namespace(
         source=source,
         output=output,
@@ -304,9 +304,9 @@ def test_collision_resolution(tmp_path):
     """Two different files with the same name in the same YYYY/MM bucket get renamed."""
     src = tmp_path / "Google Photos"
     (src / "Photos from 2020").mkdir(parents=True)
-    (src / "Vacation").mkdir(parents=True)
+    (src / "Photos from 2019").mkdir(parents=True)
     (src / "Photos from 2020" / "IMG_20200510_120000.jpg").write_bytes(b"content-A")
-    (src / "Vacation" / "IMG_20200510_120000.jpg").write_bytes(b"content-B")
+    (src / "Photos from 2019" / "IMG_20200510_120000.jpg").write_bytes(b"content-B")
     out = tmp_path / "output"
 
     run(make_args(src, out))
@@ -363,6 +363,24 @@ def test_dedup_groups_same_name_by_sidecar_timestamp(tmp_path):
     copied = media_files_in_output(out)
     assert len([p for p in copied if p.name.lower() == "img_0466.jpg"]) == 1
     assert len(symlinks_in_by_folder(out)) == 4
+
+
+def test_dedup_groups_edited_heic_by_album_year_prefix(tmp_path, capsys):
+    """Same basename in Photos from YYYY and year-prefixed album without sidecars."""
+    src = tmp_path / "Google Photos"
+    (src / "Photos from 2021").mkdir(parents=True)
+    (src / "2021-04 Easter Weekend").mkdir(parents=True)
+    (src / "Photos from 2021" / "IMG_3183-edited.HEIC").write_bytes(b"canonical-heic")
+    (src / "2021-04 Easter Weekend" / "IMG_3183-edited.HEIC").write_bytes(b"album-heic")
+    out = tmp_path / "output"
+
+    run(make_args(src, out))
+
+    copied = media_files_in_output(out)
+    assert len([p for p in copied if p.name.lower() == "img_3183-edited.heic"]) == 1
+    captured = capsys.readouterr()
+    assert "WARNING: 1 photo(s) found outside expected locations" not in captured.out
+    assert "All photos have a canonical original (as expected)" in captured.out
 
 
 def test_missing_exiftool_exits(tmp_path, monkeypatch):

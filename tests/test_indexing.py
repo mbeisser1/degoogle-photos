@@ -352,6 +352,31 @@ def test_summarize_canonical_coverage_only_in_named_album(tmp_path):
     assert stats["outside_expected_keepers"][0] == album
 
 
+def test_summarize_canonical_coverage_matches_by_basename_and_album_year(tmp_path):
+    """Same basename in Photos from YYYY and a year-prefixed named album, no sidecars."""
+    from degoogle_photos.dedup import hash_files, keeper_for_files, group_duplicates_from_hashes
+
+    year = tmp_path / "Photos from 2021" / "IMG_3183-edited.HEIC"
+    album = tmp_path / "2021-04 Easter Weekend" / "IMG_3183-edited.HEIC"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    year.write_bytes(b"canonical-heic")
+    album.write_bytes(b"album-heic-edited")
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    adjacent = {f: find_sidecar_for_media(f) for f in files}
+    dup_groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
+    keeper_map = keeper_for_files(files, file_md5, dup_groups)
+    sidecar_map = resolve_sidecars(files, dup_groups=dup_groups, adjacent=adjacent)
+
+    stats = summarize_canonical_coverage(files, file_md5, keeper_map, sidecar_map)
+    assert stats["unique_photos_only_named"] == 0
+    assert stats["outside_expected_keepers"] == []
+    assert len(dup_groups) == 1
+    assert dup_groups[0][1][0] == year
+
+
 def test_format_outside_expected_locations_groups_year_albums(tmp_path):
     paths = [
         tmp_path / "Photos from 2019" / "a.jpg",

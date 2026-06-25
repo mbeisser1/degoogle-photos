@@ -7,7 +7,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .indexing import keeper_sort_key
+from .indexing import (
+    canonical_basenames_by_year,
+    canonical_path_index,
+    canonical_source_priority,
+    canonical_year_for_path,
+    keeper_sort_key,
+)
 from .metadata import media_identity_key
 
 DEFAULT_HASH_WORKERS = 2
@@ -82,12 +88,14 @@ def group_duplicates_from_hashes(
     sidecar_map: Optional[Dict[Path, Optional[Path]]] = None,
 ) -> List[Tuple[str, List[Path]]]:
     """
-    Group duplicate files by MD5 and by matching sidecar identity.
+    Group duplicate files by MD5, sidecar identity, and basename+year.
 
     Files with the same basename and photoTakenTime (from JSON sidecars) are
     treated as the same photo even when Takeout stored different bytes in
-    canonical vs named-album folders. Groups are sorted by canonical Takeout
-    folder preference; the first entry is the keeper.
+    canonical vs named-album folders. Named-album copies also link to a
+    ``Photos from YYYY`` file with the same basename when the year can be
+    inferred. Groups are sorted by canonical Takeout folder preference; the
+    first entry is the keeper.
     """
     paths = list(file_md5.keys())
     if not paths:
@@ -111,6 +119,17 @@ def group_duplicates_from_hashes(
         for group in identity_groups.values():
             for dupe in group[1:]:
                 uf.union(group[0], dupe)
+
+    basenames_by_year = canonical_basenames_by_year(paths)
+    path_index = canonical_path_index(paths)
+    sidecars = sidecar_map or {}
+    for fpath in paths:
+        if canonical_source_priority(fpath) >= 3:
+            year = canonical_year_for_path(fpath, sidecars, basenames_by_year)
+            if year is not None:
+                canonical = path_index.get((year, fpath.name.lower()))
+                if canonical is not None:
+                    uf.union(fpath, canonical)
 
     clusters: Dict[Path, List[Path]] = defaultdict(list)
     for fpath in paths:

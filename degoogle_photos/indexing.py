@@ -3,16 +3,18 @@
 import json
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .metadata import media_identity_key
+from .metadata import media_identity_key, sidecar_capture_timestamp
 
 # Google Takeout folders that typically hold the canonical copy of a photo.
 # Lower priority number = preferred keeper when deduplicating.
 _CANONICAL_ARCHIVE_RE = re.compile(r"^Archive$", re.IGNORECASE)
 _CANONICAL_LOCKED_RE = re.compile(r"^Locked Folder$", re.IGNORECASE)
 _CANONICAL_YEAR_ALBUM_RE = re.compile(r"^Photos from \d{4}$", re.IGNORECASE)
+_NAMED_ALBUM_YEAR_PREFIX_RE = re.compile(r"^(\d{4})")
 
 
 def looks_like_google_photos_takeout(source_root: Path) -> bool:
@@ -106,6 +108,85 @@ def keeper_sort_key(media_path: Path) -> tuple:
     return (canonical_source_priority(media_path), len(str(media_path)), str(media_path))
 
 
+def year_from_canonical_folder(folder_name: str) -> Optional[int]:
+    """Parse the year from a ``Photos from YYYY`` folder name."""
+    if not _CANONICAL_YEAR_ALBUM_RE.match(folder_name):
+        return None
+    match = re.search(r"(\d{4})$", folder_name)
+    return int(match.group(1)) if match else None
+
+
+def year_from_named_album(folder_name: str) -> Optional[int]:
+    """Parse a leading year from album names like ``2021-04 Easter Weekend``."""
+    match = _NAMED_ALBUM_YEAR_PREFIX_RE.match(folder_name)
+    return int(match.group(1)) if match else None
+
+
+def canonical_basenames_by_year(files: List[Path]) -> Dict[int, Set[str]]:
+    """Map each ``Photos from YYYY`` year to the lowercase basenames it contains."""
+    by_year: Dict[int, Set[str]] = defaultdict(set)
+    for fpath in files:
+        year = year_from_canonical_folder(fpath.parent.name)
+        if year is not None:
+            by_year[year].add(fpath.name.lower())
+    return dict(by_year)
+
+
+def canonical_path_index(files: List[Path]) -> Dict[Tuple[int, str], Path]:
+    """Map ``(year, basename_lower)`` to the path under ``Photos from YYYY``."""
+    index: Dict[Tuple[int, str], Path] = {}
+    for fpath in files:
+        year = year_from_canonical_folder(fpath.parent.name)
+        if year is not None:
+            index[(year, fpath.name.lower())] = fpath
+    return index
+
+
+def _years_with_basename(
+    basenames_by_year: Dict[int, Set[str]],
+    basename_lower: str,
+) -> Set[int]:
+    return {year for year, names in basenames_by_year.items() if basename_lower in names}
+
+
+def canonical_year_for_path(
+    path: Path,
+    sidecar_map: Dict[Path, Optional[Path]],
+    basenames_by_year: Dict[int, Set[str]],
+) -> Optional[int]:
+    """
+    Infer which ``Photos from YYYY`` folder holds the canonical copy of a
+    named-album file with the same basename, or None when ambiguous.
+    """
+    if canonical_source_priority(path) < 3:
+        return None
+
+    basename = path.name.lower()
+    album_year = year_from_named_album(path.parent.name)
+    if album_year is not None and basename in basenames_by_year.get(album_year, set()):
+        return album_year
+
+    ts = sidecar_capture_timestamp(sidecar_map.get(path))
+    if ts is not None:
+        sidecar_year = datetime.fromtimestamp(ts, tz=timezone.utc).year
+        if basename in basenames_by_year.get(sidecar_year, set()):
+            return sidecar_year
+
+    matching_years = _years_with_basename(basenames_by_year, basename)
+    if len(matching_years) == 1:
+        return next(iter(matching_years))
+    return None
+
+
+def has_canonical_year_copy(
+    path: Path,
+    sidecar_map: Dict[Path, Optional[Path]],
+    basenames_by_year: Dict[int, Set[str]],
+) -> bool:
+    """True when the same basename exists under the inferred ``Photos from YYYY``."""
+    return canonical_year_for_path(path, sidecar_map, basenames_by_year) is not None
+
+
 def _canonical_identity_keys(
     files: List[Path],
     sidecar_map: Dict[Path, Optional[Path]],
@@ -126,22 +207,25 @@ def group_has_canonical_copy(
     sidecar_map: Dict[Path, Optional[Path]],
     *,
     canonical_identity_keys: Optional[Set[Tuple[str, ...]]] = None,
+    canonical_basenames_by_year: Optional[Dict[int, Set[str]]] = None,
 ) -> bool:
     """
     True when a duplicate group has a canonical Takeout copy.
 
-    Checks group members in canonical folders first, then whether another file
-    with the same basename and sidecar capture time exists under Archive,
-    Locked Folder, or Photos from YYYY.
+    Checks group members in canonical folders first, then sidecar identity,
+    then same basename under ``Photos from YYYY`` (with year disambiguation).
     """
     if any(canonical_source_priority(p) < 3 for p in paths):
         return True
-    if not canonical_identity_keys:
-        return False
-    for path in paths:
-        key = media_identity_key(path, sidecar_map.get(path))
-        if len(key) == 2 and key in canonical_identity_keys:
-            return True
+    if canonical_identity_keys:
+        for path in paths:
+            key = media_identity_key(path, sidecar_map.get(path))
+            if len(key) == 2 and key in canonical_identity_keys:
+                return True
+    if canonical_basenames_by_year:
+        for path in paths:
+            if has_canonical_year_copy(path, sidecar_map, canonical_basenames_by_year):
+                return True
     return False
 
 
@@ -157,7 +241,7 @@ def summarize_canonical_coverage(
     - named_album_paths: every scanned path under a user-named album folder
     - named_album_references: named-album paths that duplicate a keeper elsewhere
     - unique_photos_only_named: distinct photos with no copy in Archive,
-      Locked Folder, or Photos from YYYY (by MD5 or matching sidecar identity)
+      Locked Folder, or Photos from YYYY (by MD5, sidecar identity, or basename)
     - outside_expected_keepers: one keeper path per such photo (for listing)
     """
     groups_by_keeper: Dict[Path, List[Path]] = defaultdict(list)
@@ -165,6 +249,7 @@ def summarize_canonical_coverage(
         groups_by_keeper[keeper_map[fpath]].append(fpath)
 
     canonical_keys = _canonical_identity_keys(files, sidecar_map)
+    basenames_by_year = canonical_basenames_by_year(files)
     unique_photos_only_named = 0
     outside_expected_keepers: List[Path] = []
     for keeper, group in groups_by_keeper.items():
@@ -172,6 +257,7 @@ def summarize_canonical_coverage(
             group,
             sidecar_map,
             canonical_identity_keys=canonical_keys,
+            canonical_basenames_by_year=basenames_by_year,
         ):
             unique_photos_only_named += 1
             outside_expected_keepers.append(keeper)

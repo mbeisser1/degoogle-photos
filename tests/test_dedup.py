@@ -232,3 +232,39 @@ def test_group_duplicates_same_name_different_sidecar_ts_not_grouped(tmp_path):
     groups = group_duplicates_from_hashes(file_md5, sidecar_map=adjacent)
 
     assert groups == []
+
+
+def test_group_duplicates_same_basename_album_year_prefix_no_sidecar(tmp_path):
+    """Named album year prefix links to Photos from YYYY without sidecars or matching MD5."""
+    year = tmp_path / "Photos from 2021" / "IMG_3183-edited.HEIC"
+    album = tmp_path / "2021-04 Easter Weekend" / "IMG_3183-edited.HEIC"
+    year.parent.mkdir(parents=True)
+    album.parent.mkdir(parents=True)
+    year.write_bytes(b"canonical-heic")
+    album.write_bytes(b"album-heic-edited")
+
+    files = [year, album]
+    file_md5 = hash_files(files)
+    groups = group_duplicates_from_hashes(file_md5, sidecar_map={})
+
+    assert len(groups) == 1
+    assert set(groups[0][1]) == {year, album}
+    assert groups[0][1][0] == year
+
+
+def test_group_duplicates_same_basename_ambiguous_year_not_grouped(tmp_path):
+    """IMG_0466 in two year folders is not merged via basename alone."""
+    f2017 = tmp_path / "Photos from 2017" / "IMG_0466.jpg"
+    f2023 = tmp_path / "Photos from 2023" / "IMG_0466.jpg"
+    album = tmp_path / "Vacation" / "IMG_0466.jpg"
+    for path in (f2017, f2023, album):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    f2017.write_bytes(b"photo-2017")
+    f2023.write_bytes(b"photo-2023")
+    album.write_bytes(b"photo-album")
+
+    files = [f2017, f2023, album]
+    file_md5 = hash_files(files)
+    groups = group_duplicates_from_hashes(file_md5, sidecar_map={})
+
+    assert groups == []

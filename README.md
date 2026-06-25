@@ -27,7 +27,7 @@ This tool keeps **one copy** of each photo in `YYYY/MM/`, then rebuilds the tree
 
 ## Quick start
 
-Requires `exiftool` and `rar` on your PATH.
+Requires `exiftool` on your PATH. `rar` is only needed if you use `--no-skip-archive` (otherwise archive with archive-tools or similar).
 
 ```bash
 python3 dedup_photos.py \
@@ -54,8 +54,9 @@ DeGoogled Photos/
 │   └── Vacation/
 │       └── IMG_20200601_090000.jpg  →  ../../2020/06/...
 ├── report/index.html
-└── ../DeGoogled Photos.rar           ← written after a successful run
 ```
+
+Archive is off by default; use `--no-skip-archive` for built-in RAR, or archive the output folder separately.
 
 ## Options
 
@@ -64,7 +65,7 @@ DeGoogled Photos/
 | `--source PATH` | `.` | Google Photos/ folder from Takeout |
 | `--output PATH` | `./DeGoogled Photos` | Output directory |
 | `--dry-run` | off | Report only, no copies or archive |
-| `--skip-archive` | off | Do not create the RAR archive |
+| `--skip-archive` | on | Skip RAR archive (default). Use `--no-skip-archive` for built-in RAR |
 | `--no-open-browser` | off | Do not open the HTML report when done |
 | `--hash-workers N` | `2` | Parallel MD5 threads |
 
@@ -83,7 +84,7 @@ pytest -v
 
 **Sidecars:** Adjacent `.json` / `.supplemental-metadata.json` files supply dates and are copied as `filename.json` next to the keeper. Fields are embedded into media via ExifTool. Sidecars are also symlinked in `by-folder/` under their original names.
 
-**Archive:** RAR 5.0, store-only, 2 GB volumes, 1% recovery. Symlinks under `by-folder/` are followed so stored paths match the Takeout layout.
+**Archive:** Off by default (`--skip-archive`). Built-in RAR (5.0, store-only, 2 GB volumes, 1% recovery) is available via `--no-skip-archive`. Symlinks under `by-folder/` are followed so stored paths match the Takeout layout.
 
 ### Changes from upstream
 

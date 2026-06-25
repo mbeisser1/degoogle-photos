@@ -12,8 +12,12 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would be done without copying or archiving")
-    parser.add_argument("--skip-archive", action="store_true",
-                        help="Skip RAR archive creation after a successful run")
+    parser.add_argument(
+        "--skip-archive",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip RAR archive after run (default: skip; use --no-skip-archive for built-in RAR)",
+    )
     parser.add_argument("--no-open-browser", action="store_true",
                         help="Do not open the HTML report in a web browser")
     parser.add_argument("--source", type=Path, default=Path.cwd(),
